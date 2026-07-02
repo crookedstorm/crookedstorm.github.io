@@ -1,0 +1,19 @@
+{
+  "$schema": "./npm/node_modules/pi-permission-system/schemas/permissions.schema.json",
+  "bash": {
+    "*": "ask"
+  },
+  "defaultPolicy": {
+    "bash": "ask",
+    "mcp": "ask",
+    "skills": "ask",
+    "special": "ask",
+    "tools": "ask"
+  },
+  "mcp": {
+    "*": "allow"
+  },
+  "skills": {
+    "*": "allow"
+  }
+}

@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /legacy/
+
+Sitemap: https://crookedstorm.github.io/sitemap.xml

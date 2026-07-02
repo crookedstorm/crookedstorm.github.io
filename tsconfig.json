@@ -3,9 +3,5 @@
   "compilerOptions": {
     "baseUrl": "."
   },
-  "exclude": [
-    "archive",
-    "dist",
-    "public/legacy"
-  ]
+  "exclude": ["archive", "dist", "public/legacy"]
 }

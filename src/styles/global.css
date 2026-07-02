@@ -15,9 +15,16 @@ body {
   margin: 0;
   background:
     linear-gradient(rgba(255, 255, 255, 0.035) 50%, rgba(0, 0, 0, 0.18) 50%),
-    radial-gradient(circle at 50% 35%, rgba(121, 68, 188, 0.45), transparent 38%),
+    radial-gradient(
+      circle at 50% 35%,
+      rgba(121, 68, 188, 0.45),
+      transparent 38%
+    ),
     linear-gradient(135deg, #080712 0%, #151029 48%, #090816 100%);
-  background-size: 100% 4px, auto, auto;
+  background-size:
+    100% 4px,
+    auto,
+    auto;
 }
 
 body::before {
@@ -51,8 +58,7 @@ a:focus-visible {
   width: min(100%, 58rem);
   border: 8px solid #7f5bd6;
   background:
-    linear-gradient(180deg, rgba(247, 215, 116, 0.05), transparent 18%),
-    #151029;
+    linear-gradient(180deg, rgba(247, 215, 116, 0.05), transparent 18%), #151029;
   box-shadow:
     0 0 0 4px #261a45,
     0 0 0 10px #06050d,

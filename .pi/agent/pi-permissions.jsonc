@@ -1,7 +1,8 @@
 {
   "$schema": "./npm/node_modules/pi-permission-system/schemas/permissions.schema.json",
   "bash": {
-    "*": "ask"
+    "*": "ask",
+    "npm *": "allow"
   },
   "defaultPolicy": {
     "bash": "ask",

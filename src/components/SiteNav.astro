@@ -1,0 +1,13 @@
+---
+const links = [
+  { href: '/', label: 'Home' },
+  { href: '/about/', label: 'About' },
+  { href: '/blog/', label: 'Blog' },
+  { href: '/projects/', label: 'Projects' },
+  { href: '/legacy/', label: 'Archives' },
+];
+---
+
+<nav class="site-nav" aria-label="Primary navigation">
+  {links.map((link) => <a href={link.href}>{link.label}</a>)}
+</nav>

@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /legacy/
+
+Sitemap: https://brooke.largespiky.club/sitemap-index.xml

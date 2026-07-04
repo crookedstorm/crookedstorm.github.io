@@ -1,0 +1,29 @@
+{
+  "name": "crookedstorm-github-io",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "check": "astro check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint \"src/**/*.{js,ts,astro}\"",
+    "build": "npm run check && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/check": "latest",
+    "@astrojs/sitemap": "^3.7.3",
+    "astro": "latest",
+    "typescript": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@typescript-eslint/parser": "^8.62.1",
+    "eslint": "^10.6.0",
+    "eslint-plugin-astro": "^2.1.1",
+    "prettier": "^3.9.4",
+    "prettier-plugin-astro": "^0.14.1"
+  }
+}

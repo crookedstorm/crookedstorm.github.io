@@ -1,0 +1,29 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+
+const title = '404 | Wanderings and Misadventures';
+const description = 'The requested page could not be found.';
+---
+
+<BaseLayout title={title} description={description}>
+  <main class="page-shell">
+    <article class="page-panel">
+      <SiteNav />
+      <p class="eyebrow">404</p>
+      <h1>Path Not Found</h1>
+      <p>
+        The map does not mark this place. The trail may have moved, collapsed,
+        or wandered into a different part of the network.
+      </p>
+      <p>
+        Return to camp, browse the current sections, or check the archives for
+        older paths.
+      </p>
+      <p>
+        <a class="button-link" href="/">Return to camp</a>
+      </p>
+    </article>
+  </main>
+</BaseLayout>

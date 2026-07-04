@@ -1,0 +1,6 @@
+.astro/
+.pi/
+archive/
+dist/
+node_modules/
+public/legacy/

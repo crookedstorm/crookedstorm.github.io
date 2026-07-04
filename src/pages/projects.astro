@@ -1,0 +1,31 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+
+const title = 'Projects | Wanderings and Misadventures';
+const description =
+  'Projects, experiments, and builds from Wanderings and Misadventures.';
+---
+
+<BaseLayout title={title} description={description}>
+  <main class="page-shell">
+    <article class="page-panel">
+      <SiteNav />
+      <p class="eyebrow">PROJECTS</p>
+      <h1>Projects</h1>
+      <p>
+        This section will collect the practical things: homelab experiments,
+        technical notes, builds, field setups, maps, tools, and whatever else
+        escapes the workbench.
+      </p>
+      <p>
+        The full project list is still being assembled. Until then, the archive
+        preserves the older site content.
+      </p>
+      <p>
+        <a class="button-link" href="/legacy/">Browse the archives</a>
+      </p>
+    </article>
+  </main>
+</BaseLayout>

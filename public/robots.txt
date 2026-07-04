@@ -1,4 +1,4 @@
 User-agent: *
 Disallow: /legacy/
 
-Sitemap: https://crookedstorm.github.io/sitemap.xml
+Sitemap: https://brooke.largespiky.club/sitemap-index.xml

@@ -1,0 +1,27 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+
+const title = 'About | Wanderings and Misadventures';
+const description = 'About Brooke Storm and Wanderings and Misadventures.';
+---
+
+<BaseLayout title={title} description={description}>
+  <main class="page-shell">
+    <article class="page-panel">
+      <SiteNav />
+      <p class="eyebrow">ABOUT</p>
+      <h1>About Brooke</h1>
+      <p>
+        Brooke Storm is the keeper of this campfire at the edge of the network.
+        This site collects notes from the road, the terminal, the workshop, and
+        other places where curiosity tends to get out of hand.
+      </p>
+      <p>
+        Expect writing about homelab experiments, overland travel, geocaching,
+        projects, and the occasional misadventure.
+      </p>
+    </article>
+  </main>
+</BaseLayout>

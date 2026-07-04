@@ -1,0 +1,29 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+
+const title = 'Blog | Wanderings and Misadventures';
+const description = 'Posts and notes from Wanderings and Misadventures.';
+---
+
+<BaseLayout title={title} description={description}>
+  <main class="page-shell">
+    <article class="page-panel">
+      <SiteNav />
+      <p class="eyebrow">BLOG</p>
+      <h1>Field Notes</h1>
+      <p>
+        The new blog archive is not migrated yet. For now, the previous posts
+        remain available in the legacy archive.
+      </p>
+      <p>
+        Future posts will live here as regular Astro-generated HTML, with the
+        interactive world acting as another path to reach them.
+      </p>
+      <p>
+        <a class="button-link" href="/legacy/blog/">Browse legacy posts</a>
+      </p>
+    </article>
+  </main>
+</BaseLayout>

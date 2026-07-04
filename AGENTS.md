@@ -14,6 +14,12 @@ npm run build
 
 For dependency or tool configuration changes, run the same full set.
 
+For GitHub Actions workflow changes under `.github/workflows/`, run:
+
+```bash
+actionlint
+```
+
 For changes limited to planning or documentation, run formatting checks when practical:
 
 ```bash

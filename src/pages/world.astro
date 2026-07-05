@@ -1,0 +1,44 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+
+const title = 'World | Wanderings and Misadventures';
+const description =
+  'A small interactive gateway to Wanderings and Misadventures.';
+---
+
+<BaseLayout title={title} description={description}>
+  <main class="page-shell">
+    <article class="page-panel world-panel">
+      <SiteNav />
+      <p class="eyebrow">WORLD GATEWAY</p>
+      <h1>Choose a Path</h1>
+      <p>
+        Use arrow keys or WASD to move. Walk into a marker or press Enter while
+        standing on one to open that section.
+      </p>
+      <canvas
+        id="world-canvas"
+        class="world-canvas"
+        width="640"
+        height="384"
+        aria-label="Interactive map with paths to About, Blog, and Projects"
+      >
+        The interactive map requires Canvas support. Use the links below to
+        browse the site.
+      </canvas>
+      <p id="world-status" class="world-status" aria-live="polite">
+        Standing at camp.
+      </p>
+      <nav class="world-links" aria-label="World destinations">
+        <a class="button-link" href="/about/">About</a>
+        <a class="button-link" href="/blog/">Blog</a>
+        <a class="button-link" href="/projects/">Projects</a>
+      </nav>
+    </article>
+  </main>
+  <script>
+    import '../scripts/world.ts';
+  </script>
+</BaseLayout>

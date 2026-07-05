@@ -195,6 +195,33 @@ p {
   color: #151029;
 }
 
+.world-panel {
+  width: min(100%, 54rem);
+}
+
+.world-canvas {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border: 4px solid #f7d774;
+  background: #0b0918;
+  box-shadow: 0.5rem 0.5rem 0 #06050d;
+  image-rendering: pixelated;
+}
+
+.world-status {
+  color: #f7d774;
+  font-weight: 700;
+}
+
+.world-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .command-line::after {
     animation: cursor-blink 1s steps(2, end) infinite;

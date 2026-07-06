@@ -6,12 +6,16 @@
 //! pockets — which suits a navigation-as-discovery world better than a
 //! twisting perfect maze.
 
+use crate::components::Collected;
 use crate::components::Collider;
 use crate::components::ObjectKind;
 use crate::components::Position;
 use crate::components::Section;
 use crate::rng::Rng;
 use crate::world::World;
+
+/// Treats placed per maze. Tunable, but matches the original TS spawn count.
+const TREAT_COUNT: usize = 8;
 
 /// One carved room in tile coordinates. Stored so room centers can be used
 /// later to place camp, destinations, and treats.
@@ -280,17 +284,10 @@ impl Maze {
         let room_indices = pick_distinct(rng, self.rooms.len(), 1 + 3);
 
         // Camp goes in the first picked room.
+        let camp_pos = self.rooms[room_indices[0]].center();
         {
-            let room = self.rooms[room_indices[0]];
-            let center = room.center();
             let entity = world.spawn();
-            world.insert(
-                entity,
-                Position {
-                    x: center.x,
-                    y: center.y,
-                },
-            );
+            world.insert(entity, camp_pos);
             world.insert(entity, ObjectKind::Camp);
             world.insert(
                 entity,
@@ -300,24 +297,73 @@ impl Maze {
 
         let sections = [Section::About, Section::Blog, Section::Projects];
 
+        let mut destination_positions = Vec::new();
         for (room_index, section) in room_indices[1..].iter().zip(sections) {
-            let room = self.rooms[*room_index];
-            let center = room.center();
+            let center = self.rooms[*room_index].center();
+            destination_positions.push(center);
             let entity = world.spawn();
+            world.insert(entity, center);
+            world.insert(entity, ObjectKind::Destination { section });
             world.insert(
                 entity,
-                Position {
-                    x: center.x,
-                    y: center.y,
-                },
+                crate::components::Sprite(crate::components::SpriteId::Destination),
             );
-            world.insert(entity, ObjectKind::Destination { section });
+        }
+
+        self.place_treats(world, rng, camp_pos, &destination_positions);
+    }
+
+    /// Scatter `TREAT_COUNT` treats across open floor tiles, rejecting any
+    /// tile adjacent (Chebyshev distance <= 1) to camp, a destination, or a
+    /// previously placed treat.
+    fn place_treats(
+        &self,
+        world: &mut World,
+        rng: &mut Rng,
+        camp: Position,
+        destinations: &[Position],
+    ) {
+        let mut candidates = Vec::new();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if !self.is_wall(x, y) {
+                    candidates.push(Position { x, y });
+                }
+            }
+        }
+
+        let mut placed: Vec<Position> = Vec::new();
+
+        while placed.len() < TREAT_COUNT && !candidates.is_empty() {
+            let idx = rng.below(candidates.len() as u32) as usize;
+            let candidate = candidates.swap_remove(idx);
+
+            if is_near(candidate, camp) {
+                continue;
+            }
+            if destinations.iter().any(|dest| is_near(candidate, *dest)) {
+                continue;
+            }
+            if placed.iter().any(|treat| is_near(candidate, *treat)) {
+                continue;
+            }
+
+            let entity = world.spawn();
+            world.insert(entity, candidate);
+            world.insert(entity, ObjectKind::Treat);
+            world.insert(entity, Collected(false));
             world.insert(
                 entity,
                 crate::components::Sprite(crate::components::SpriteId::Treat),
             );
+            placed.push(candidate);
         }
     }
+}
+
+/// Returns `true` when `a` is within one tile (Chebyshev distance <= 1) of `b`.
+fn is_near(a: Position, b: Position) -> bool {
+    (a.x - b.x).abs() <= 1 && (a.y - b.y).abs() <= 1
 }
 
 /// Pick `count` distinct indices in `[0, limit)` without replacement.

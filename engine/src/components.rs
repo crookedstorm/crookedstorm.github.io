@@ -7,16 +7,26 @@
 
 use serde::Serialize;
 
-/// Integer tile-grid position. The simulation works in tile space;
-/// sub-tile movement lives in [`Velocity`] and the renderer's camera.
+/// Integer tile-grid position for static entities: walls, treats, camp,
+/// destinations. The simulation works in tile space for these; the player
+/// uses [`Transform`] for sub-tile smooth movement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Position {
     pub x: i32,
     pub y: i32,
 }
 
-/// Continuous-space velocity applied to a [`crate::components::Position`]
-/// when integrating motion. Units are tiles per step.
+/// Continuous-space pixel position for the player. The renderer reads this
+/// to blit the raccoon sprite; collision converts to tile space when checking
+/// against the maze grid.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Transform {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Continuous-space velocity in pixels per step. Applied to a [`Transform`]
+/// when integrating motion.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Velocity {
     pub x: f32,
@@ -74,6 +84,7 @@ pub enum SpriteId {
     PlayerRaccoon,
     Camp,
     Treat,
+    Destination,
 }
 
 /// Associates an entity with a visible sprite on the renderer side.

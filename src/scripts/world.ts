@@ -1,91 +1,17 @@
-type Destination = {
-  color: string;
-  description: string;
-  href: string;
-  label: string;
-  x: number;
-  y: number;
-};
+// World gateway renderer and input layer.
+//
+// The simulation lives in the Rust engine (see `src/engine/index.ts`). This
+// module owns the canvas, keyboard input, and per-frame drawing. Each frame
+// it gathers input, calls `engine.step(input)`, and paints from the returned
+// `FrameState` plus the one-time `InitState` fetched at startup.
+//
+// Without JavaScript, the static links below the canvas still work; this
+// module progressively enhances the page with the explorable world.
 
-type Player = {
-  velocityX: number;
-  velocityY: number;
-  x: number;
-  y: number;
-};
+import { createEngine } from '../engine/index.js';
+import type { FrameState, InitState, Input } from '../engine/index.js';
 
-type Treat = {
-  collected: boolean;
-  x: number;
-  y: number;
-};
-
-const tileSize = 32;
-const playerSize = 32;
-const movementStep = 4;
-const spritePixelSize = 2;
-const acceleration = 0.6;
-const maxSpeed = 4;
-const friction = 0.85;
-const treatCount = 8;
-const treatValue = 50;
-const campPosition = {
-  x: 15 * tileSize,
-  y: 4 * tileSize,
-};
-
-const mazeRows = [
-  '##############################',
-  '#............##..............#',
-  '#............##..............#',
-  '#............................#',
-  '#............................#',
-  '#....######........######....#',
-  '#.........#........#.........#',
-  '#.........#........#.........#',
-  '#............................#',
-  '#..####.................####.#',
-  '#.....#.................#....#',
-  '#.....#.....######......#....#',
-  '#...........#....#...........#',
-  '#...........#....#...........#',
-  '#............................#',
-  '#....######..........######..#',
-  '#............................#',
-  '#............................#',
-  '#.......####......####.......#',
-  '#............................#',
-  '#..............##............#',
-  '#..............##............#',
-  '##############################',
-];
-
-const destinations: Destination[] = [
-  {
-    color: '#f7d774',
-    description: 'About Brooke',
-    href: '/about/',
-    label: 'ABOUT',
-    x: 7,
-    y: 17,
-  },
-  {
-    color: '#98e6ff',
-    description: 'Field notes and posts',
-    href: '/blog/',
-    label: 'BLOG',
-    x: 23,
-    y: 17,
-  },
-  {
-    color: '#b49cff',
-    description: 'Projects and experiments',
-    href: '/projects/',
-    label: 'PROJECTS',
-    x: 15,
-    y: 19,
-  },
-];
+type Engine = Awaited<ReturnType<typeof createEngine>>;
 
 const raccoonPalette: Record<string, string> = {
   B: '#06050d',
@@ -115,6 +41,16 @@ const raccoonSprite = [
   '................',
 ];
 
+const spritePixelSize = 2;
+const spriteWidth = raccoonSprite[0].length * spritePixelSize;
+const spriteHeight = raccoonSprite.length * spritePixelSize;
+
+const destinationColors: Record<string, string> = {
+  '/about/': '#f7d774',
+  '/blog/': '#98e6ff',
+  '/projects/': '#b49cff',
+};
+
 const canvasElement =
   document.querySelector<HTMLCanvasElement>('#world-canvas');
 const statusElement = document.querySelector<HTMLElement>('#world-status');
@@ -132,148 +68,78 @@ if (!canvasContext) {
 }
 
 const context = canvasContext;
-const player: Player = {
-  velocityX: 0,
-  velocityY: 0,
-  x: campPosition.x,
-  y: campPosition.y,
-};
 
 const pressedKeys = new Set<string>();
-let activeDestination: Destination | null = null;
-let score = 0;
-let lastTreatMessageFrames = 0;
 
-function tileToPixel(tileCoordinate: number): number {
-  return tileCoordinate * tileSize;
-}
+function readSeedFromUrl(): bigint {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get('seed');
 
-function pixelToTile(pixelCoordinate: number): number {
-  return Math.floor(pixelCoordinate / tileSize);
-}
-
-function isWallTile(tileX: number, tileY: number): boolean {
-  const row = mazeRows[tileY];
-
-  if (!row) {
-    return true;
+  if (raw === null || raw === '') {
+    // Default to a fresh random seed so each visit without ?seed= is novel;
+    // URLs with ?seed=N reproduce the same maze.
+    return BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
   }
 
-  return row[tileX] === '#';
-}
-
-function isNearTile(
-  tileX: number,
-  tileY: number,
-  targetX: number,
-  targetY: number,
-): boolean {
-  return Math.abs(tileX - targetX) <= 1 && Math.abs(tileY - targetY) <= 1;
-}
-
-function isBlockedForTreat(
-  tileX: number,
-  tileY: number,
-  treats: Treat[],
-): boolean {
-  if (isWallTile(tileX, tileY)) {
-    return true;
+  // Accept decimals and hex prefixed with 0x.
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber) && raw.trim() !== '') {
+    return BigInt(Math.trunc(asNumber));
   }
 
-  const campTileX = pixelToTile(campPosition.x);
-  const campTileY = pixelToTile(campPosition.y);
-
-  if (isNearTile(tileX, tileY, campTileX, campTileY)) {
-    return true;
+  try {
+    return BigInt(raw);
+  } catch {
+    return BigInt(0);
   }
-
-  const isNearDestination = destinations.some((destination) =>
-    isNearTile(tileX, tileY, destination.x, destination.y),
-  );
-
-  if (isNearDestination) {
-    return true;
-  }
-
-  return treats.some((treat) => isNearTile(tileX, tileY, treat.x, treat.y));
 }
 
-function createRandomTreats(): Treat[] {
-  const randomTreats: Treat[] = [];
-  const candidateTiles: Treat[] = [];
-
-  mazeRows.forEach((row, rowIndex) => {
-    Array.from(row).forEach((tile, columnIndex) => {
-      if (tile === '.') {
-        candidateTiles.push({ collected: false, x: columnIndex, y: rowIndex });
-      }
-    });
-  });
-
-  while (randomTreats.length < treatCount && candidateTiles.length > 0) {
-    const candidateIndex = Math.floor(Math.random() * candidateTiles.length);
-    const [candidate] = candidateTiles.splice(candidateIndex, 1);
-
-    if (
-      !candidate ||
-      isBlockedForTreat(candidate.x, candidate.y, randomTreats)
-    ) {
-      continue;
-    }
-
-    randomTreats.push(candidate);
-  }
-
-  return randomTreats;
+function buildInput(): Input {
+  return {
+    up: pressedKeys.has('arrowup') || pressedKeys.has('w'),
+    down: pressedKeys.has('arrowdown') || pressedKeys.has('s'),
+    left: pressedKeys.has('arrowleft') || pressedKeys.has('a'),
+    right: pressedKeys.has('arrowright') || pressedKeys.has('d'),
+    enter: pressedKeys.has('enter'),
+  };
 }
 
-const treats = createRandomTreats();
-
-function wouldCollideWithWall(x: number, y: number): boolean {
-  const halfPlayer = playerSize / 2 - 4;
-  const left = pixelToTile(x - halfPlayer);
-  const right = pixelToTile(x + halfPlayer);
-  const top = pixelToTile(y - halfPlayer);
-  const bottom = pixelToTile(y + halfPlayer);
-
-  return (
-    isWallTile(left, top) ||
-    isWallTile(right, top) ||
-    isWallTile(left, bottom) ||
-    isWallTile(right, bottom)
-  );
-}
-
-function drawBackground(): void {
+function drawBackground(init: InitState): void {
   context.fillStyle = '#0b0918';
   context.fillRect(0, 0, canvas.width, canvas.height);
 
-  mazeRows.forEach((row, rowIndex) => {
-    Array.from(row).forEach((tile, columnIndex) => {
-      const x = columnIndex * tileSize;
-      const y = rowIndex * tileSize;
+  // Open floor tiles are implicit; only walls are drawn as solid blocks.
+  for (const wall of init.walls) {
+    const x = wall.x * init.tileSize;
+    const y = wall.y * init.tileSize;
 
-      if (tile === '#') {
-        context.fillStyle = '#261a45';
-        context.fillRect(x, y, tileSize, tileSize);
+    context.fillStyle = '#261a45';
+    context.fillRect(x, y, init.tileSize, init.tileSize);
 
-        context.fillStyle = '#3d2a6f';
-        context.fillRect(x + 3, y + 3, tileSize - 6, tileSize - 6);
-        return;
-      }
+    context.fillStyle = '#3d2a6f';
+    context.fillRect(x + 3, y + 3, init.tileSize - 6, init.tileSize - 6);
+  }
 
-      context.fillStyle = '#100d20';
-      context.fillRect(x, y, tileSize, tileSize);
-
-      context.strokeStyle = '#20183f';
-      context.strokeRect(x, y, tileSize, tileSize);
-    });
-  });
+  // Faint floor grid so open space still reads as a tile world.
+  context.strokeStyle = '#20183f';
+  context.lineWidth = 1;
+  for (let x = 0; x <= canvas.width; x += init.tileSize) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, canvas.height);
+    context.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += init.tileSize) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(canvas.width, y);
+    context.stroke();
+  }
 }
 
-function drawCamp(): void {
-  const campX = campPosition.x;
-  const campY = campPosition.y;
+function drawCamp(init: InitState): void {
+  const campX = init.camp.x * init.tileSize + init.tileSize / 2;
+  const campY = init.camp.y * init.tileSize + init.tileSize / 2;
 
   context.fillStyle = '#f07f5b';
   context.fillRect(campX - 8, campY - 8, 16, 16);
@@ -282,31 +148,33 @@ function drawCamp(): void {
   context.fillRect(campX - 4, campY - 14, 8, 8);
 }
 
-function drawDestinations(): void {
-  for (const destination of destinations) {
-    const x = tileToPixel(destination.x);
-    const y = tileToPixel(destination.y);
+function drawDestinations(init: InitState): void {
+  for (const destination of init.destinations) {
+    const x = destination.x * init.tileSize;
+    const y = destination.y * init.tileSize;
 
     context.fillStyle = '#06050d';
     context.fillRect(x - 18, y - 18, 68, 44);
 
-    context.fillStyle = destination.color;
+    context.fillStyle = destinationColors[destination.href] ?? '#f7d774';
     context.fillRect(x - 14, y - 14, 60, 36);
 
     context.fillStyle = '#151029';
     context.font = '700 12px Courier New, monospace';
-    context.fillText(destination.label, x - 8, y + 7);
+    // Short label: the section name, uppercased first word.
+    context.fillText(
+      destination.label.toUpperCase().split(' ')[0],
+      x - 8,
+      y + 7,
+    );
   }
 }
 
-function drawTreats(): void {
-  for (const treat of treats) {
-    if (treat.collected) {
-      continue;
-    }
-
-    const x = tileToPixel(treat.x);
-    const y = tileToPixel(treat.y);
+function drawTreats(init: InitState, frame: FrameState): void {
+  // Drawn from the live treat list each frame so collected treats vanish.
+  for (const treat of frame.treats) {
+    const x = treat.x * init.tileSize;
+    const y = treat.y * init.tileSize;
 
     context.fillStyle = '#06050d';
     context.fillRect(x + 10, y + 10, 12, 12);
@@ -320,14 +188,12 @@ function drawTreats(): void {
 }
 
 function drawPixelSprite(sprite: string[], x: number, y: number): void {
-  sprite.forEach((row, rowIndex) => {
-    Array.from(row).forEach((pixel, columnIndex) => {
+  for (const [rowIndex, row] of sprite.entries()) {
+    for (const [columnIndex, pixel] of Array.from(row).entries()) {
       const color = raccoonPalette[pixel];
-
       if (!color) {
-        return;
+        continue;
       }
-
       context.fillStyle = color;
       context.fillRect(
         x + columnIndex * spritePixelSize,
@@ -335,8 +201,8 @@ function drawPixelSprite(sprite: string[], x: number, y: number): void {
         spritePixelSize,
         spritePixelSize,
       );
-    });
-  });
+    }
+  }
 }
 
 function drawPlayerShadow(
@@ -347,183 +213,69 @@ function drawPlayerShadow(
   offsetY: number,
 ): void {
   context.fillStyle = '#06050d';
-
-  sprite.forEach((row, rowIndex) => {
-    Array.from(row).forEach((pixel, columnIndex) => {
+  for (const [rowIndex, row] of sprite.entries()) {
+    for (const [columnIndex, pixel] of Array.from(row).entries()) {
       if (!raccoonPalette[pixel]) {
-        return;
+        continue;
       }
-
       context.fillRect(
         x + columnIndex * spritePixelSize + offsetX,
         y + rowIndex * spritePixelSize + offsetY,
         spritePixelSize,
         spritePixelSize,
       );
-    });
-  });
+    }
+  }
 }
 
-function drawPlayer(): void {
-  const spriteWidth = raccoonSprite[0].length * spritePixelSize;
-  const spriteHeight = raccoonSprite.length * spritePixelSize;
-  const spriteX = player.x - spriteWidth / 2;
-  const spriteY = player.y - spriteHeight / 2;
+function drawPlayer(frame: FrameState): void {
+  const spriteX = frame.playerX - spriteWidth / 2;
+  const spriteY = frame.playerY - spriteHeight / 2;
 
   drawPlayerShadow(raccoonSprite, spriteX, spriteY, 3, 3);
   drawPixelSprite(raccoonSprite, spriteX, spriteY);
 }
 
-function getDestinationAtPlayer(): Destination | null {
-  return (
-    destinations.find((destination) => {
-      const destinationX = tileToPixel(destination.x);
-      const destinationY = tileToPixel(destination.y);
-      const distanceX = Math.abs(player.x - destinationX);
-      const distanceY = Math.abs(player.y - destinationY);
-
-      return distanceX < tileSize && distanceY < tileSize;
-    }) ?? null
-  );
+function draw(init: InitState, frame: FrameState): void {
+  drawBackground(init);
+  drawTreats(init, frame);
+  drawCamp(init);
+  drawDestinations(init);
+  drawPlayer(frame);
 }
 
-function isPlayerNearCamp(): boolean {
-  const distanceX = Math.abs(player.x - campPosition.x);
-  const distanceY = Math.abs(player.y - campPosition.y);
-
-  return distanceX < tileSize && distanceY < tileSize;
-}
-
-function collectTreats(): void {
-  for (const treat of treats) {
-    if (treat.collected) {
-      continue;
-    }
-
-    const treatX = tileToPixel(treat.x) + tileSize / 2;
-    const treatY = tileToPixel(treat.y) + tileSize / 2;
-    const distanceX = Math.abs(player.x - treatX);
-    const distanceY = Math.abs(player.y - treatY);
-
-    if (distanceX < tileSize / 2 && distanceY < tileSize / 2) {
-      treat.collected = true;
-      score += treatValue;
-      lastTreatMessageFrames = 90;
-    }
-  }
-}
-
-function updateStatus(): void {
-  activeDestination = getDestinationAtPlayer();
-
-  if (lastTreatMessageFrames > 0) {
-    statusOutput.textContent = `Treat acquired. Score: ${score}`;
-    lastTreatMessageFrames -= 1;
+function handleNavigation(frame: FrameState): void {
+  if (!frame.pendingNavigation) {
     return;
   }
-
-  if (activeDestination) {
-    statusOutput.textContent = `${activeDestination.description}. Press Enter to enter. Score: ${score}`;
-    return;
-  }
-
-  if (isPlayerNearCamp()) {
-    statusOutput.textContent = `Standing at camp. Score: ${score}`;
-    return;
-  }
-
-  statusOutput.textContent = `Adventuring… Score: ${score}`;
+  // Engine requested a page transition because Enter was pressed while
+  // standing on a destination.
+  window.location.href = frame.pendingNavigation;
 }
 
-function applyMovementIntent(): void {
-  let intentX = 0;
-  let intentY = 0;
+async function bootstrap(): Promise<void> {
+  const seed = readSeedFromUrl();
+  const engine: Engine = await createEngine(seed);
+  const init = engine.init_state() as unknown as InitState;
 
-  if (pressedKeys.has('arrowup') || pressedKeys.has('w')) {
-    intentY -= 1;
+  // Size the canvas to the generated maze so the world always fits exactly.
+  canvas.width = init.width * init.tileSize;
+  canvas.height = init.height * init.tileSize;
+
+  // Render an initial frame so the page is not blank before the first rAF.
+  statusOutput.textContent = 'Booting world…';
+
+  function tick(): void {
+    const input = buildInput();
+    const frame = engine.step(input) as unknown as FrameState;
+
+    statusOutput.textContent = frame.status;
+    draw(init, frame);
+    handleNavigation(frame);
+
+    window.requestAnimationFrame(tick);
   }
 
-  if (pressedKeys.has('arrowdown') || pressedKeys.has('s')) {
-    intentY += 1;
-  }
-
-  if (pressedKeys.has('arrowleft') || pressedKeys.has('a')) {
-    intentX -= 1;
-  }
-
-  if (pressedKeys.has('arrowright') || pressedKeys.has('d')) {
-    intentX += 1;
-  }
-
-  if (intentX !== 0 && intentY !== 0) {
-    const diagonalScale = Math.SQRT1_2;
-    intentX *= diagonalScale;
-    intentY *= diagonalScale;
-  }
-
-  player.velocityX += intentX * acceleration;
-  player.velocityY += intentY * acceleration;
-
-  const speed = Math.hypot(player.velocityX, player.velocityY);
-
-  if (speed > maxSpeed) {
-    const scale = maxSpeed / speed;
-    player.velocityX *= scale;
-    player.velocityY *= scale;
-  }
-
-  if (intentX === 0) {
-    player.velocityX *= friction;
-  }
-
-  if (intentY === 0) {
-    player.velocityY *= friction;
-  }
-
-  if (Math.abs(player.velocityX) < 0.1) {
-    player.velocityX = 0;
-  }
-
-  if (Math.abs(player.velocityY) < 0.1) {
-    player.velocityY = 0;
-  }
-}
-
-function tryMovePlayer(deltaX: number, deltaY: number): void {
-  const nextX = player.x + deltaX;
-  const nextY = player.y + deltaY;
-
-  if (!wouldCollideWithWall(nextX, player.y)) {
-    player.x = nextX;
-  } else {
-    player.velocityX = 0;
-  }
-
-  if (!wouldCollideWithWall(player.x, nextY)) {
-    player.y = nextY;
-  } else {
-    player.velocityY = 0;
-  }
-}
-
-function movePlayer(): void {
-  applyMovementIntent();
-  tryMovePlayer(player.velocityX, player.velocityY);
-}
-
-function draw(): void {
-  drawBackground();
-  drawTreats();
-  drawCamp();
-  drawDestinations();
-  drawPlayer();
-}
-
-function tick(): void {
-  movePlayer();
-  collectTreats();
-  updateStatus();
-  draw();
   window.requestAnimationFrame(tick);
 }
 
@@ -540,14 +292,11 @@ window.addEventListener('keydown', (event) => {
       'a',
       's',
       'd',
+      'enter',
     ].includes(key)
   ) {
     event.preventDefault();
     pressedKeys.add(key);
-  }
-
-  if (key === 'enter' && activeDestination) {
-    window.location.href = activeDestination.href;
   }
 });
 
@@ -555,5 +304,4 @@ window.addEventListener('keyup', (event) => {
   pressedKeys.delete(event.key.toLowerCase());
 });
 
-draw();
-tick();
+void bootstrap();

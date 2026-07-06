@@ -4,6 +4,11 @@
 //! Rendering, DOM interaction, and input handling live in the Astro/TypeScript
 //! layer and consume the [`FrameState`] produced here.
 
+pub mod components;
+pub mod maze;
+pub mod rng;
+pub mod world;
+
 use serde::Serialize;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -16,9 +21,9 @@ pub fn version() -> String {
 
 /// Full simulation snapshot returned to TypeScript each frame.
 ///
-/// Kept empty for the scaffolding stage. Gameplay fields land here as systems
-/// come online: player position, sprite ids, status text, score, destinations,
-/// collected treats, and so on.
+/// Kept minimal for the scaffolding stage. Gameplay fields land here as
+/// systems come online: player position, sprite ids, status text, score,
+/// destinations, collected treats, and so on.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameState {
@@ -29,14 +34,14 @@ pub struct FrameState {
 impl FrameState {
     fn snapshot() -> Self {
         Self {
-            protocol_version: 1,
+            protocol_version: 2,
         }
     }
 }
 
 /// Produce a fresh frame snapshot. With no systems wired up yet this returns a
-/// constant `FrameState`, but it exercises the serde-wasm-bindgen bridge so the
-/// TypeScript pipeline can be validated end to end during scaffolding.
+/// constant `FrameState`, but it exercises the serde-wasm-bindgen bridge so
+/// the TypeScript pipeline can be validated end to end during scaffolding.
 #[wasm_bindgen]
 pub fn step() -> JsValue {
     let state = FrameState::snapshot();

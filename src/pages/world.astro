@@ -21,8 +21,8 @@ const description =
       <canvas
         id="world-canvas"
         class="world-canvas"
-        width="640"
-        height="384"
+        width="960"
+        height="720"
         aria-label="Interactive map with paths to About, Blog, and Projects"
       >
         The interactive map requires Canvas support. Use the links below to
@@ -40,5 +40,10 @@ const description =
   </main>
   <script>
     import '../scripts/world.ts';
+    import { engineVersion } from '../engine/index.js';
+
+    engineVersion().then((version) => {
+      console.log(`engine v${version} online`);
+    });
   </script>
 </BaseLayout>

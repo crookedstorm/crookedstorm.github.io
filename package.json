@@ -4,12 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "astro dev",
+    "dev": "npm run engine:build && astro dev",
     "check": "astro check",
+    "engine:build": "wasm-pack build engine --target web --out-dir pkg",
+    "engine:test": "cargo test --manifest-path engine/Cargo.toml",
+    "engine:fmt": "cargo fmt --manifest-path engine/Cargo.toml -- --check",
+    "engine:clippy": "cargo clippy --manifest-path engine/Cargo.toml -- -D warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint \"src/**/*.{js,ts,astro}\"",
-    "build": "npm run check && astro build",
+    "build": "npm run engine:build && npm run check && astro build",
     "preview": "astro preview"
   },
   "dependencies": {
@@ -24,6 +28,7 @@
     "eslint": "^10.6.0",
     "eslint-plugin-astro": "^2.1.1",
     "prettier": "^3.9.4",
-    "prettier-plugin-astro": "^0.14.1"
+    "prettier-plugin-astro": "^0.14.1",
+    "vite-plugin-wasm": "^3.6.0"
   }
 }

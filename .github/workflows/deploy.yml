@@ -28,14 +28,26 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         run: npm ci
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Check formatting
         run: npm run format:check
 
-      - name: Lint
+      - name: Lint TypeScript and Astro
         run: npm run lint
+
+      - name: Check Rust formatting
+        run: npm run engine:fmt
+
+      - name: Lint Rust
+        run: npm run engine:clippy
+
+      - name: Test Rust
+        run: npm run engine:test
 
   build:
     runs-on: ubuntu-latest
@@ -50,10 +62,18 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         run: npm ci
 
-      - name: Build
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/action-wasm-pack@v0.4.0
+
+      - name: Build site (engine + astro)
         run: npm run build
 
       - name: Configure GitHub Pages

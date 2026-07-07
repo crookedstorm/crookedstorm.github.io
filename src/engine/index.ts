@@ -6,11 +6,14 @@ import init, {
   version as engineVersionRaw,
 } from '../../engine/pkg/engine.js';
 
+export type Direction = 'up' | 'down' | 'left' | 'right';
+
 export type Input = {
   up: boolean;
   down: boolean;
   left: boolean;
   right: boolean;
+  preferredDirection: Direction | null;
   enter: boolean;
 };
 

@@ -12,6 +12,7 @@ pub mod state;
 pub mod systems;
 pub mod world;
 
+use crate::components::GridMotion;
 use crate::components::ObjectKind;
 use crate::components::Player;
 use crate::components::Position;
@@ -35,7 +36,7 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 /// Bumped whenever the engine's public contract changes.
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = 4;
 
 /// Engine release identifier surfaced to TypeScript as a pipeline smoke test.
 #[wasm_bindgen]
@@ -78,6 +79,16 @@ impl Engine {
             },
         );
         world.insert(player, Velocity { x: 0.0, y: 0.0 });
+        world.insert(
+            player,
+            GridMotion {
+                tile_x: camp_pos.x,
+                tile_y: camp_pos.y,
+                active_direction: None,
+                buffered_direction: None,
+                frames_remaining: 0,
+            },
+        );
         world.insert(player, Player::default());
         world.insert(player, Sprite(SpriteId::PlayerRaccoon));
 
@@ -100,12 +111,17 @@ impl Engine {
 
         let player_start = self
             .world
-            .component::<Transform>(self.player)
-            .map(|transform| {
-                TilePos::new(
-                    (transform.x / TILE_SIZE) as i32,
-                    (transform.y / TILE_SIZE) as i32,
-                )
+            .component::<GridMotion>(self.player)
+            .map(|motion| TilePos::new(motion.tile_x, motion.tile_y))
+            .or_else(|| {
+                self.world
+                    .component::<Transform>(self.player)
+                    .map(|transform| {
+                        TilePos::new(
+                            (transform.x / TILE_SIZE) as i32,
+                            (transform.y / TILE_SIZE) as i32,
+                        )
+                    })
             })
             .unwrap_or_else(|| TilePos::new(camp.x, camp.y));
 
@@ -164,30 +180,19 @@ impl Engine {
 impl Engine {
     fn compute_status(&self, collected_this_frame: bool) -> String {
         if collected_this_frame || self.treat_message_frames > 0 {
-            let score = self
-                .world
-                .component::<Player>(self.player)
-                .map(|player| player.score)
-                .unwrap_or(0);
-            return format!("Treat acquired. Score: {score}");
+            return "Treat acquired.".to_owned();
         }
-
-        let score = self
-            .world
-            .component::<Player>(self.player)
-            .map(|player| player.score)
-            .unwrap_or(0);
 
         if let Some(href) = &self.active_destination_href {
             let label = section_label_for_href(href).unwrap_or("");
-            return format!("{label}. Press Enter to enter. Score: {score}");
+            return format!("{label}. Press Enter to enter.");
         }
 
         if systems::is_near_camp(&self.world, self.player) {
-            return format!("Standing at camp. Score: {score}");
+            return "Standing at camp.".to_owned();
         }
 
-        format!("Adventuring… Score: {score}")
+        "Adventuring…".to_owned()
     }
 
     fn snapshot(&mut self, status: String, treats: Vec<TilePos>) -> FrameState {

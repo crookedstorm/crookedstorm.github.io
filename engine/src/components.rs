@@ -5,11 +5,12 @@
 //! gameplay behaviors add new structs here rather than new branches inside
 //! a god-component.
 
+use serde::Deserialize;
 use serde::Serialize;
 
 /// Integer tile-grid position for static entities: walls, treats, camp,
 /// destinations. The simulation works in tile space for these; the player
-/// uses [`Transform`] for sub-tile smooth movement.
+/// uses [`GridMotion`] plus [`Transform`] for tile-aligned smooth movement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Position {
     pub x: i32,
@@ -17,20 +18,56 @@ pub struct Position {
 }
 
 /// Continuous-space pixel position for the player. The renderer reads this
-/// to blit the raccoon sprite; collision converts to tile space when checking
-/// against the maze grid.
+/// to blit the raccoon sprite; the movement system updates it by interpolating
+/// between tile centers from the authoritative [`GridMotion`] state.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Transform {
     pub x: f32,
     pub y: f32,
 }
 
-/// Continuous-space velocity in pixels per step. Applied to a [`Transform`]
-/// when integrating motion.
+/// Per-frame pixel delta surfaced to the renderer. The movement system writes
+/// the actual transform change applied this frame so consumers can derive a
+/// sense of motion without owning the simulation.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Velocity {
     pub x: f32,
     pub y: f32,
+}
+
+/// Cardinal movement direction for buffered tile stepping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Direction {
+    pub fn delta(self) -> (i32, i32) {
+        match self {
+            Self::Up => (0, -1),
+            Self::Down => (0, 1),
+            Self::Left => (-1, 0),
+            Self::Right => (1, 0),
+        }
+    }
+}
+
+/// Authoritative player grid position plus any in-flight tile step. `tile_x`
+/// and `tile_y` are the current centered tile while moving; once a step
+/// finishes they advance to the destination tile. `buffered_direction` stores
+/// the latest held direction so the next step can chain without an extra input
+/// edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridMotion {
+    pub tile_x: i32,
+    pub tile_y: i32,
+    pub active_direction: Option<Direction>,
+    pub buffered_direction: Option<Direction>,
+    pub frames_remaining: u32,
 }
 
 /// Marks an entity as a solid wall occupying its tile.

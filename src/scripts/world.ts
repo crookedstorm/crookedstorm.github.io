@@ -9,7 +9,12 @@
 // module progressively enhances the page with the explorable world.
 
 import { createEngine } from '../engine/index.js';
-import type { FrameState, InitState, Input } from '../engine/index.js';
+import type {
+  Direction,
+  FrameState,
+  InitState,
+  Input,
+} from '../engine/index.js';
 
 type Engine = Awaited<ReturnType<typeof createEngine>>;
 
@@ -53,14 +58,20 @@ const destinationColors: Record<string, string> = {
 
 const canvasElement =
   document.querySelector<HTMLCanvasElement>('#world-canvas');
-const statusElement = document.querySelector<HTMLElement>('#world-status');
+const statusMessageElement = document.querySelector<HTMLElement>(
+  '#world-status-message',
+);
+const scoreElement = document.querySelector<HTMLElement>('#world-score');
 
-if (!canvasElement || !statusElement) {
-  throw new Error('World gateway requires #world-canvas and #world-status.');
+if (!canvasElement || !statusMessageElement || !scoreElement) {
+  throw new Error(
+    'World gateway requires #world-canvas, #world-status-message, and #world-score.',
+  );
 }
 
 const canvas = canvasElement;
-const statusOutput = statusElement;
+const statusOutput = statusMessageElement;
+const scoreOutput = scoreElement;
 const canvasContext = canvas.getContext('2d');
 
 if (!canvasContext) {
@@ -70,6 +81,60 @@ if (!canvasContext) {
 const context = canvasContext;
 
 const pressedKeys = new Set<string>();
+const directionPressOrder: Direction[] = [];
+let enterPressedThisFrame = false;
+
+function keyToDirection(key: string): Direction | null {
+  if (key === 'arrowup' || key === 'w') {
+    return 'up';
+  }
+  if (key === 'arrowdown' || key === 's') {
+    return 'down';
+  }
+  if (key === 'arrowleft' || key === 'a') {
+    return 'left';
+  }
+  if (key === 'arrowright' || key === 'd') {
+    return 'right';
+  }
+  return null;
+}
+
+function rememberDirectionPress(direction: Direction): void {
+  removeDirectionPress(direction);
+  directionPressOrder.push(direction);
+}
+
+function removeDirectionPress(direction: Direction): void {
+  const index = directionPressOrder.indexOf(direction);
+  if (index === -1) {
+    return;
+  }
+  directionPressOrder.splice(index, 1);
+}
+
+function isDirectionHeld(direction: Direction): boolean {
+  if (direction === 'up') {
+    return pressedKeys.has('arrowup') || pressedKeys.has('w');
+  }
+  if (direction === 'down') {
+    return pressedKeys.has('arrowdown') || pressedKeys.has('s');
+  }
+  if (direction === 'left') {
+    return pressedKeys.has('arrowleft') || pressedKeys.has('a');
+  }
+  return pressedKeys.has('arrowright') || pressedKeys.has('d');
+}
+
+function currentPreferredDirection(): Direction | null {
+  for (let index = directionPressOrder.length - 1; index >= 0; index -= 1) {
+    const direction = directionPressOrder[index];
+    if (isDirectionHeld(direction)) {
+      return direction;
+    }
+  }
+  return null;
+}
 
 function readSeedFromUrl(): bigint {
   const params = new URLSearchParams(window.location.search);
@@ -95,13 +160,17 @@ function readSeedFromUrl(): bigint {
 }
 
 function buildInput(): Input {
-  return {
+  const input: Input = {
     up: pressedKeys.has('arrowup') || pressedKeys.has('w'),
     down: pressedKeys.has('arrowdown') || pressedKeys.has('s'),
     left: pressedKeys.has('arrowleft') || pressedKeys.has('a'),
     right: pressedKeys.has('arrowright') || pressedKeys.has('d'),
-    enter: pressedKeys.has('enter'),
+    preferredDirection: currentPreferredDirection(),
+    enter: enterPressedThisFrame,
   };
+
+  enterPressedThisFrame = false;
+  return input;
 }
 
 function drawBackground(init: InitState): void {
@@ -264,12 +333,14 @@ async function bootstrap(): Promise<void> {
 
   // Render an initial frame so the page is not blank before the first rAF.
   statusOutput.textContent = 'Booting world…';
+  scoreOutput.textContent = 'Score: 0';
 
   function tick(): void {
     const input = buildInput();
     const frame = engine.step(input) as unknown as FrameState;
 
     statusOutput.textContent = frame.status;
+    scoreOutput.textContent = `Score: ${frame.score}`;
     draw(init, frame);
     handleNavigation(frame);
 
@@ -296,12 +367,32 @@ window.addEventListener('keydown', (event) => {
     ].includes(key)
   ) {
     event.preventDefault();
+
+    const wasAlreadyPressed = pressedKeys.has(key);
     pressedKeys.add(key);
+
+    if (key === 'enter' && !wasAlreadyPressed) {
+      enterPressedThisFrame = true;
+    }
+
+    const direction = keyToDirection(key);
+    if (direction) {
+      rememberDirectionPress(direction);
+    }
   }
 });
 
 window.addEventListener('keyup', (event) => {
-  pressedKeys.delete(event.key.toLowerCase());
+  const key = event.key.toLowerCase();
+  pressedKeys.delete(key);
+
+  const direction = keyToDirection(key);
+  if (!direction) {
+    return;
+  }
+  if (!isDirectionHeld(direction)) {
+    removeDirectionPress(direction);
+  }
 });
 
 void bootstrap();

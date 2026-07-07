@@ -92,27 +92,32 @@ impl Maze {
             height: config.height - 2,
         };
 
-        maze.split(root, config, rng);
+        let _ = maze.split(root, config, rng);
 
         maze
     }
 
     /// Recursive BSP step. Splits the given room along a random axis when
-    /// both children remain useful, then carves both; otherwise carves a
-    /// single leaf.
-    fn split(&mut self, region: Room, config: MazeConfig, rng: &mut Rng) {
+    /// both children remain useful, then connects a representative room center
+    /// from each child subtree. Returns a room center from the connected
+    /// subtree so parents can continue joining larger regions.
+    fn split(&mut self, region: Room, config: MazeConfig, rng: &mut Rng) -> Position {
         let split_horizontally = rng.below(2) == 0;
 
         if let Some((lower, upper)) = self.try_split(region, split_horizontally, config, rng) {
-            self.split(lower, config, rng);
-            self.split(upper, config, rng);
+            let lower_anchor = self.split(lower, config, rng);
+            let upper_anchor = self.split(upper, config, rng);
+            self.connect(lower_anchor, upper_anchor);
+            lower_anchor
         } else if let Some((lower, upper)) =
             self.try_split(region, !split_horizontally, config, rng)
         {
-            self.split(lower, config, rng);
-            self.split(upper, config, rng);
+            let lower_anchor = self.split(lower, config, rng);
+            let upper_anchor = self.split(upper, config, rng);
+            self.connect(lower_anchor, upper_anchor);
+            lower_anchor
         } else {
-            self.carve_room(region, config, rng);
+            self.carve_room(region, config, rng)
         }
     }
 
@@ -183,7 +188,7 @@ impl Maze {
     /// Carve a leaf room centered inside the leaf region, leaving a margin
     /// for walls. Records the room for later placement of camp, destinations,
     /// and treats.
-    fn carve_room(&mut self, region: Room, config: MazeConfig, rng: &mut Rng) {
+    fn carve_room(&mut self, region: Room, config: MazeConfig, rng: &mut Rng) -> Position {
         let room_width = rng.between(
             config.min_room as u32,
             config.max_room.min(region.width) as u32,
@@ -208,6 +213,7 @@ impl Maze {
 
         self.carve_rect(room.left, room.top, room.width, room.height);
         self.rooms.push(room);
+        room.center()
     }
 
     fn carve_rect(&mut self, left: i32, top: i32, width: i32, height: i32) {
@@ -381,13 +387,52 @@ fn pick_distinct(rng: &mut Rng, limit: usize, count: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use super::Maze;
     use super::MazeConfig;
     use super::Rng;
     use super::Room;
 
+    fn count_reachable_open_tiles(maze: &Maze) -> usize {
+        let start = (0..maze.height)
+            .flat_map(|y| (0..maze.width).map(move |x| (x, y)))
+            .find(|(x, y)| !maze.is_wall(*x, *y));
+
+        let Some((start_x, start_y)) = start else {
+            return 0;
+        };
+
+        let mut seen = vec![false; (maze.width * maze.height) as usize];
+        let mut queue = VecDeque::from([(start_x, start_y)]);
+        let mut reachable = 0usize;
+
+        while let Some((x, y)) = queue.pop_front() {
+            if x < 0 || y < 0 || x >= maze.width || y >= maze.height {
+                continue;
+            }
+            if maze.is_wall(x, y) {
+                continue;
+            }
+
+            let index = (y * maze.width + x) as usize;
+            if seen[index] {
+                continue;
+            }
+            seen[index] = true;
+            reachable += 1;
+
+            queue.push_back((x + 1, y));
+            queue.push_back((x - 1, y));
+            queue.push_back((x, y + 1));
+            queue.push_back((x, y - 1));
+        }
+
+        reachable
+    }
+
     #[test]
-    fn maze_is_fully_connected_open() {
+    fn maze_keeps_a_solid_border() {
         let mut rng = Rng::from_seed(1234);
         let config = MazeConfig::default();
         let maze = Maze::new(config, &mut rng);
@@ -410,6 +455,27 @@ mod tests {
                 "right border should be solid at y={y}"
             );
         }
+    }
+
+    #[test]
+    fn generated_maze_has_one_connected_open_region() {
+        let config = MazeConfig::default();
+        let maze = Maze::new(config, &mut Rng::from_seed(1234));
+
+        let total_open_tiles = (0..maze.height)
+            .flat_map(|y| (0..maze.width).map(move |x| (x, y)))
+            .filter(|(x, y)| !maze.is_wall(*x, *y))
+            .count();
+        let reachable_open_tiles = count_reachable_open_tiles(&maze);
+
+        assert!(
+            total_open_tiles > 0,
+            "maze should carve at least one open tile"
+        );
+        assert_eq!(
+            reachable_open_tiles, total_open_tiles,
+            "every open tile should be reachable from every other open tile"
+        );
     }
 
     #[test]

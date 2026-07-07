@@ -6,18 +6,22 @@
 //! the engine is signalling to the renderer. [`Input`] flows the other way:
 //! the pressed-key set for the frame.
 
+use crate::components::Direction;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Per-frame input gathered by TypeScript from keyboard state.
-#[derive(Clone, Copy, Debug, Deserialize)]
+/// Per-frame input gathered by TypeScript from keyboard state. The booleans
+/// report which cardinal keys are held; `preferred_direction` records the most
+/// recently pressed held direction so buffered grid movement can resolve turns
+/// predictably when several keys are down.
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
 pub struct Input {
     pub up: bool,
     pub down: bool,
     pub left: bool,
     pub right: bool,
+    pub preferred_direction: Option<Direction>,
     pub enter: bool,
 }
 

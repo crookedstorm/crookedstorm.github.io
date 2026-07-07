@@ -1,8 +1,10 @@
-//! Simulation systems: movement, collision, treat collection, destination
-//! and camp proximity detection. Each is a plain function taking the
+//! Simulation systems: movement, treat collection, destination detection,
+//! and camp proximity checks. Each is a plain function taking the
 //! [`World`](crate::world::World) and maze references it needs. The caller
 //! in [`Engine`](crate::Engine) chooses the execution order.
 
+use crate::components::Direction;
+use crate::components::GridMotion;
 use crate::components::ObjectKind;
 use crate::components::Player;
 use crate::components::Position;
@@ -17,21 +19,9 @@ use crate::world::World;
 /// Tile size in pixels. Matches the renderer's tile size in `world.astro`.
 pub const TILE_SIZE: f32 = 32.0;
 
-/// Player collision box side, in pixels. One tile wide so the raccoon fits
-/// through single-tile corridors.
-pub const PLAYER_SIZE: f32 = 32.0;
-
-/// Pixels per step added per frame of held input.
-pub const ACCELERATION: f32 = 0.6;
-
-/// Cap on speed magnitude in pixels per step.
-pub const MAX_SPEED: f32 = 4.0;
-
-/// Velocity multiplier applied each frame when the related axis has no input.
-pub const FRICTION: f32 = 0.85;
-
-/// Snapped-to-zero threshold; tiny drift is clamped to avoid perpetual jitter.
-pub const STOP_EPSILON: f32 = 0.1;
+/// Frames used to travel one full tile. Short enough to stay responsive,
+/// long enough to read as a gentle glide between grid centers.
+pub const GRID_STEP_FRAMES: u32 = 8;
 
 /// Points awarded per treat collected. Matches the original TS implementation.
 pub const TREAT_VALUE: u32 = 50;
@@ -40,138 +30,166 @@ pub const TREAT_VALUE: u32 = 50;
 /// collection, matching the original TS feel.
 pub const TREAT_MESSAGE_FRAMES: u32 = 90;
 
-/// Half the player's collision box, inset slightly so corners fit into
-/// corridors without snagging on adjacent walls.
-fn player_half_extent() -> f32 {
-    PLAYER_SIZE / 2.0 - 4.0
+fn tile_center(tile: i32) -> f32 {
+    tile as f32 * TILE_SIZE + TILE_SIZE / 2.0
 }
 
-/// Returns `true` if the player's bounding box at the given center overlaps
-/// any solid wall tile.
-fn collides_at(maze: &Maze, center_x: f32, center_y: f32) -> bool {
-    let half = player_half_extent();
-    let corners = [
-        (center_x - half, center_y - half),
-        (center_x + half, center_y - half),
-        (center_x - half, center_y + half),
-        (center_x + half, center_y + half),
-    ];
-
-    corners.iter().any(|(cx, cy)| {
-        let tile_x = (cx / TILE_SIZE).floor() as i32;
-        let tile_y = (cy / TILE_SIZE).floor() as i32;
-        maze.is_wall(tile_x, tile_y)
-    })
+fn centered_transform(tile_x: i32, tile_y: i32) -> Transform {
+    Transform {
+        x: tile_center(tile_x),
+        y: tile_center(tile_y),
+    }
 }
 
-/// Apply acceleration along the input axes, clamp speed, and decay velocity
-/// on idle axes via friction. Mutates only the player's [`Velocity`].
+fn smoothstep(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn preferred_direction(input: &Input) -> Option<Direction> {
+    if input.preferred_direction.is_some() {
+        return input.preferred_direction;
+    }
+
+    if input.left && !input.right {
+        return Some(Direction::Left);
+    }
+    if input.right && !input.left {
+        return Some(Direction::Right);
+    }
+    if input.up && !input.down {
+        return Some(Direction::Up);
+    }
+    if input.down && !input.up {
+        return Some(Direction::Down);
+    }
+
+    None
+}
+
+fn player_tile_position(world: &World, player: Entity) -> Option<Position> {
+    if let Some(motion) = world.component::<GridMotion>(player) {
+        return Some(Position {
+            x: motion.tile_x,
+            y: motion.tile_y,
+        });
+    }
+
+    world
+        .component::<Transform>(player)
+        .map(|transform| Position {
+            x: (transform.x / TILE_SIZE) as i32,
+            y: (transform.y / TILE_SIZE) as i32,
+        })
+}
+
+fn can_step(maze: &Maze, tile_x: i32, tile_y: i32, direction: Direction) -> bool {
+    let (dx, dy) = direction.delta();
+    !maze.is_wall(tile_x + dx, tile_y + dy)
+}
+
+fn start_buffered_step(motion: &mut GridMotion, maze: &Maze) {
+    if motion.active_direction.is_some() {
+        return;
+    }
+
+    let Some(direction) = motion.buffered_direction else {
+        return;
+    };
+
+    if !can_step(maze, motion.tile_x, motion.tile_y, direction) {
+        return;
+    }
+
+    motion.active_direction = Some(direction);
+    motion.frames_remaining = GRID_STEP_FRAMES;
+}
+
+fn interpolated_transform(motion: &GridMotion) -> Transform {
+    let Some(direction) = motion.active_direction else {
+        return centered_transform(motion.tile_x, motion.tile_y);
+    };
+
+    let (dx, dy) = direction.delta();
+    let start = centered_transform(motion.tile_x, motion.tile_y);
+    let end = centered_transform(motion.tile_x + dx, motion.tile_y + dy);
+    let completed_frames = GRID_STEP_FRAMES - motion.frames_remaining;
+    let progress = completed_frames as f32 / GRID_STEP_FRAMES as f32;
+    let eased_progress = smoothstep(progress);
+
+    Transform {
+        x: start.x + (end.x - start.x) * eased_progress,
+        y: start.y + (end.y - start.y) * eased_progress,
+    }
+}
+
+/// Record the latest held direction so grid movement can turn cleanly at the
+/// next tile center. When no movement keys are held, the buffer is cleared.
 pub fn apply_input(world: &mut World, player: Entity, input: &Input) {
-    let Some(velocity) = world.component_mut::<Velocity>(player) else {
+    let Some(motion) = world.component_mut::<GridMotion>(player) else {
         return;
     };
 
-    let mut intent_x = 0.0_f32;
-    let mut intent_y = 0.0_f32;
-
-    if input.left {
-        intent_x -= 1.0;
-    }
-    if input.right {
-        intent_x += 1.0;
-    }
-    if input.up {
-        intent_y -= 1.0;
-    }
-    if input.down {
-        intent_y += 1.0;
-    }
-
-    if intent_x != 0.0 && intent_y != 0.0 {
-        let diagonal_scale = std::f32::consts::SQRT_2.recip();
-        intent_x *= diagonal_scale;
-        intent_y *= diagonal_scale;
-    }
-
-    velocity.x += intent_x * ACCELERATION;
-    velocity.y += intent_y * ACCELERATION;
-
-    let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-    if speed > MAX_SPEED {
-        let scale = MAX_SPEED / speed;
-        velocity.x *= scale;
-        velocity.y *= scale;
-    }
-
-    if intent_x == 0.0 {
-        velocity.x *= FRICTION;
-    }
-    if intent_y == 0.0 {
-        velocity.y *= FRICTION;
-    }
-
-    if velocity.x.abs() < STOP_EPSILON {
-        velocity.x = 0.0;
-    }
-    if velocity.y.abs() < STOP_EPSILON {
-        velocity.y = 0.0;
-    }
+    motion.buffered_direction = preferred_direction(input);
 }
 
-/// Integrate the player's velocity into its [`Transform`], with per-axis wall
-/// collision. The axis that would collide is zeroed instead of moving, so the
-/// raccoon slides along walls rather than sticking.
+/// Advance the player by at most one frame of tile-step motion. The player
+/// moves only between adjacent open tiles and always lands exactly centered on
+/// the grid. The latest buffered direction is reused at each tile boundary so
+/// held input can continue straight or turn smoothly.
 pub fn move_with_collision(world: &mut World, maze: &Maze, player: Entity) {
-    let Some(velocity) = world.component::<Velocity>(player).copied() else {
+    let Some(mut motion) = world.component::<GridMotion>(player).copied() else {
         return;
     };
 
-    // X axis: try the move; if it collides, leave position unchanged and zero
-    // the x velocity so subsequent frames don't keep pushing into the wall.
-    let current_x = world.component::<Transform>(player).map(|t| t.x);
-    let current_y = world.component::<Transform>(player).map(|t| t.y);
-    let (Some(current_x), Some(current_y)) = (current_x, current_y) else {
-        return;
-    };
-
-    let next_x = current_x + velocity.x;
-    if !collides_at(maze, next_x, current_y) {
-        if let Some(transform) = world.component_mut::<Transform>(player) {
-            transform.x = next_x;
-        }
-    } else if let Some(v) = world.component_mut::<Velocity>(player) {
-        v.x = 0.0;
-    }
-
-    // Y axis: re-read transform.x in case the X step above changed it.
-    let updated_x = world
+    let previous_transform = world
         .component::<Transform>(player)
-        .map(|t| t.x)
-        .unwrap_or(current_x);
+        .copied()
+        .unwrap_or_else(|| centered_transform(motion.tile_x, motion.tile_y));
 
-    let next_y = current_y + velocity.y;
-    if !collides_at(maze, updated_x, next_y) {
-        if let Some(transform) = world.component_mut::<Transform>(player) {
-            transform.y = next_y;
+    start_buffered_step(&mut motion, maze);
+
+    let next_transform = if motion.active_direction.is_some() {
+        motion.frames_remaining -= 1;
+        let transform = interpolated_transform(&motion);
+
+        if motion.frames_remaining == 0 {
+            let direction = motion
+                .active_direction
+                .expect("active direction exists while finishing a grid step");
+            let (dx, dy) = direction.delta();
+            motion.tile_x += dx;
+            motion.tile_y += dy;
+            motion.active_direction = None;
+            start_buffered_step(&mut motion, maze);
+            centered_transform(motion.tile_x, motion.tile_y)
+        } else {
+            transform
         }
-    } else if let Some(v) = world.component_mut::<Velocity>(player) {
-        v.y = 0.0;
-    }
+    } else {
+        centered_transform(motion.tile_x, motion.tile_y)
+    };
+
+    let velocity = Velocity {
+        x: next_transform.x - previous_transform.x,
+        y: next_transform.y - previous_transform.y,
+    };
+
+    world.insert(player, motion);
+    world.insert(player, next_transform);
+    world.insert(player, velocity);
 }
 
-/// Collect any uncollected treat overlapping the player's tile. Returns `true`
-/// if a treat was collected this frame. Sets the player's `just_collected_treat`
-/// flag for the snapshot to surface to the renderer.
+/// Collect any uncollected treat overlapping the player's current tile.
+/// Returns `true` if a treat was collected this frame. Sets the player's
+/// `just_collected_treat` flag for the snapshot to surface to the renderer.
 pub fn collect_treats(world: &mut World, player: Entity) -> bool {
-    let Some((player_center_x, player_center_y)) = world
-        .component::<Transform>(player)
-        .map(|transform| (transform.x, transform.y))
+    let Some(Position {
+        x: player_tile_x,
+        y: player_tile_y,
+    }) = player_tile_position(world, player)
     else {
         return false;
     };
-
-    let player_tile_x = (player_center_x / TILE_SIZE) as i32;
-    let player_tile_y = (player_center_y / TILE_SIZE) as i32;
 
     let treat_entities = world.entities_with::<ObjectKind>();
     let mut collected_any = false;
@@ -197,9 +215,6 @@ pub fn collect_treats(world: &mut World, player: Entity) -> bool {
             continue;
         };
 
-        // Treat collision uses tile proximity: same tile or one of the eight
-        // neighbors of the player. Generous enough that running past a treat
-        // at speed still collects it.
         if (player_tile_x - x).abs() <= 1 && (player_tile_y - y).abs() <= 1 {
             world.insert(entity, crate::components::Collected(true));
             if let Some(player_state) = world.component_mut::<Player>(player) {
@@ -217,9 +232,10 @@ pub fn collect_treats(world: &mut World, player: Entity) -> bool {
 /// any. Used by the engine to drive the "press Enter to enter" prompt and the
 /// pending-navigation signal.
 pub fn active_destination(world: &World, player: Entity) -> Option<Section> {
-    let transform = world.component::<Transform>(player)?;
-    let player_tile_x = (transform.x / TILE_SIZE) as i32;
-    let player_tile_y = (transform.y / TILE_SIZE) as i32;
+    let Position {
+        x: player_tile_x,
+        y: player_tile_y,
+    } = player_tile_position(world, player)?;
 
     for entity in world.entities_with::<ObjectKind>() {
         if let Some(ObjectKind::Destination { section }) = world.component::<ObjectKind>(entity)
@@ -236,11 +252,13 @@ pub fn active_destination(world: &World, player: Entity) -> Option<Section> {
 
 /// Returns `true` when the player is within one tile of the camp marker.
 pub fn is_near_camp(world: &World, player: Entity) -> bool {
-    let Some(transform) = world.component::<Transform>(player) else {
+    let Some(Position {
+        x: player_tile_x,
+        y: player_tile_y,
+    }) = player_tile_position(world, player)
+    else {
         return false;
     };
-    let player_tile_x = (transform.x / TILE_SIZE) as i32;
-    let player_tile_y = (transform.y / TILE_SIZE) as i32;
 
     for entity in world.entities_with::<ObjectKind>() {
         if let Some(ObjectKind::Camp) = world.component::<ObjectKind>(entity)
@@ -280,6 +298,8 @@ pub fn remaining_treats(world: &World) -> u32 {
 mod tests {
     use super::*;
     use crate::components::Collected;
+    use crate::components::Direction;
+    use crate::components::GridMotion;
     use crate::components::ObjectKind;
     use crate::components::Player;
     use crate::components::Position;
@@ -292,6 +312,15 @@ mod tests {
     use crate::state::Input;
     use crate::world::World;
 
+    fn empty_maze(width: i32, height: i32) -> Maze {
+        Maze {
+            width,
+            height,
+            tiles: vec![false; (width * height) as usize],
+            rooms: Vec::new(),
+        }
+    }
+
     fn build_world_with_player_at(tile_x: i32, tile_y: i32) -> (World, Entity, Maze) {
         let mut rng = Rng::from_seed(7);
         let mut world = World::new();
@@ -299,92 +328,174 @@ mod tests {
         maze.spawn_walls(&mut world);
 
         let player = world.spawn();
+        world.insert(player, centered_transform(tile_x, tile_y));
+        world.insert(player, Velocity { x: 0.0, y: 0.0 });
         world.insert(
             player,
-            Transform {
-                x: tile_x as f32 * TILE_SIZE + TILE_SIZE / 2.0,
-                y: tile_y as f32 * TILE_SIZE + TILE_SIZE / 2.0,
+            GridMotion {
+                tile_x,
+                tile_y,
+                active_direction: None,
+                buffered_direction: None,
+                frames_remaining: 0,
             },
         );
-        world.insert(player, Velocity { x: 0.0, y: 0.0 });
         world.insert(player, Player::default());
 
         (world, player, maze)
     }
 
+    fn step_player(world: &mut World, maze: &Maze, player: Entity, input: Input) {
+        apply_input(world, player, &input);
+        move_with_collision(world, maze, player);
+    }
+
     #[test]
-    fn acceleration_increases_velocity_in_input_direction() {
-        let (mut world, player, maze_idx) = build_world_with_player_at(15, 5);
-        let _ = maze_idx;
+    fn latest_held_direction_becomes_the_buffered_direction() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
         let input = Input {
-            up: false,
+            up: true,
             down: false,
-            left: true,
-            right: false,
+            left: false,
+            right: true,
+            preferred_direction: Some(Direction::Up),
             enter: false,
         };
 
         apply_input(&mut world, player, &input);
-        let velocity = world.component::<Velocity>(player).unwrap();
-        assert!(velocity.x < 0.0, "should accelerate left: {:?}", velocity);
-        assert!(velocity.y.abs() < f32::EPSILON);
+
+        let motion = world.component::<GridMotion>(player).unwrap();
+        assert_eq!(motion.buffered_direction, Some(Direction::Up));
     }
 
     #[test]
-    fn friction_decays_idle_axes() {
-        let (mut world, player, _) = build_world_with_player_at(15, 5);
-        world.insert(player, Velocity { x: 2.0, y: 0.0 });
+    fn move_with_collision_starts_a_grid_step_immediately() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
+        let maze = empty_maze(8, 8);
 
-        let input = Input::default();
-        apply_input(&mut world, player, &input);
-
-        let velocity = world.component::<Velocity>(player).unwrap();
-        assert!(
-            velocity.x < 2.0,
-            "friction should decay velocity: {:?}",
-            velocity
-        );
-    }
-
-    #[test]
-    fn move_with_collision_advances_on_open_floor() {
-        let (mut world, player, maze) = build_world_with_player_at(15, 5);
-        world.insert(player, Velocity { x: 3.0, y: 0.0 });
-
-        move_with_collision(&mut world, &maze, player);
-
-        let transform = world.component::<Transform>(player).unwrap();
-        assert!(
-            transform.x > 15.0 * TILE_SIZE,
-            "should have moved right: {}",
-            transform.x
-        );
-    }
-
-    #[test]
-    fn move_with_collision_blocks_walls() {
-        let (mut world, player, maze) = build_world_with_player_at(15, 5);
-
-        // Build a guaranteed wall by querying the maze for one near the player.
-        let wall_tile = (0..maze.width)
-            .flat_map(|x| (0..maze.height).map(move |y| (x, y)))
-            .find(|(x, y)| maze.is_wall(*x, *y))
-            .expect("maze has walls");
-
-        // Place the player just inside the wall so a small step into it collides.
-        world.insert(
+        step_player(
+            &mut world,
+            &maze,
             player,
-            Transform {
-                x: wall_tile.0 as f32 * TILE_SIZE - 2.0,
-                y: wall_tile.1 as f32 * TILE_SIZE + TILE_SIZE / 2.0,
+            Input {
+                up: false,
+                down: false,
+                left: false,
+                right: true,
+                preferred_direction: Some(Direction::Right),
+                enter: false,
             },
         );
-        world.insert(player, Velocity { x: 4.0, y: 0.0 });
 
-        move_with_collision(&mut world, &maze, player);
-
+        let transform = world.component::<Transform>(player).unwrap();
         let velocity = world.component::<Velocity>(player).unwrap();
-        assert_eq!(velocity.x, 0.0, "x velocity should be zeroed on wall hit");
+
+        assert!(transform.x > tile_center(3));
+        assert_eq!(transform.y, tile_center(3));
+        assert!(velocity.x > 0.0);
+        assert_eq!(velocity.y, 0.0);
+    }
+
+    #[test]
+    fn grid_step_lands_exactly_on_the_next_tile_center() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
+        let maze = empty_maze(8, 8);
+        let input = Input {
+            up: false,
+            down: false,
+            left: false,
+            right: true,
+            preferred_direction: Some(Direction::Right),
+            enter: false,
+        };
+
+        for _ in 0..GRID_STEP_FRAMES {
+            step_player(&mut world, &maze, player, input);
+        }
+
+        let motion = world.component::<GridMotion>(player).unwrap();
+        let transform = world.component::<Transform>(player).unwrap();
+
+        assert_eq!(motion.tile_x, 4);
+        assert_eq!(motion.tile_y, 3);
+        assert_eq!(transform.x, tile_center(4));
+        assert_eq!(transform.y, tile_center(3));
+    }
+
+    #[test]
+    fn buffered_turn_starts_after_arriving_at_the_next_tile() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
+        let maze = empty_maze(8, 8);
+        let move_right = Input {
+            up: false,
+            down: false,
+            left: false,
+            right: true,
+            preferred_direction: Some(Direction::Right),
+            enter: false,
+        };
+        let turn_up = Input {
+            up: true,
+            down: false,
+            left: false,
+            right: true,
+            preferred_direction: Some(Direction::Up),
+            enter: false,
+        };
+
+        for _ in 0..(GRID_STEP_FRAMES - 1) {
+            step_player(&mut world, &maze, player, move_right);
+        }
+
+        step_player(&mut world, &maze, player, turn_up);
+
+        let motion = world.component::<GridMotion>(player).unwrap();
+        let transform = world.component::<Transform>(player).unwrap();
+        assert_eq!(motion.tile_x, 4);
+        assert_eq!(motion.tile_y, 3);
+        assert_eq!(transform.x, tile_center(4));
+        assert_eq!(transform.y, tile_center(3));
+        assert_eq!(motion.active_direction, Some(Direction::Up));
+
+        step_player(&mut world, &maze, player, turn_up);
+
+        let transform = world.component::<Transform>(player).unwrap();
+        assert!(transform.y < tile_center(3));
+        assert_eq!(transform.x, tile_center(4));
+    }
+
+    #[test]
+    fn blocked_step_keeps_the_player_centered_on_the_tile() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
+        let mut maze = empty_maze(8, 8);
+        let blocked_index = (3 * maze.width + 4) as usize;
+        maze.tiles[blocked_index] = true;
+
+        step_player(
+            &mut world,
+            &maze,
+            player,
+            Input {
+                up: false,
+                down: false,
+                left: false,
+                right: true,
+                preferred_direction: Some(Direction::Right),
+                enter: false,
+            },
+        );
+
+        let motion = world.component::<GridMotion>(player).unwrap();
+        let transform = world.component::<Transform>(player).unwrap();
+        let velocity = world.component::<Velocity>(player).unwrap();
+
+        assert_eq!(motion.tile_x, 3);
+        assert_eq!(motion.tile_y, 3);
+        assert_eq!(motion.active_direction, None);
+        assert_eq!(transform.x, tile_center(3));
+        assert_eq!(transform.y, tile_center(3));
+        assert_eq!(velocity.x, 0.0);
+        assert_eq!(velocity.y, 0.0);
     }
 
     #[test]

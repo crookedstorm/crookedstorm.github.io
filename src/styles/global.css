@@ -221,8 +221,24 @@ p {
 }
 
 .world-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: baseline;
+  justify-content: space-between;
   color: #f7d774;
   font-weight: 700;
+}
+
+#world-status-message {
+  flex: 1 1 24rem;
+}
+
+#world-score {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .world-links {

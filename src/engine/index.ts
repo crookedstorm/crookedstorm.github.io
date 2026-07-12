@@ -19,6 +19,17 @@ export type Input = {
 
 export type TilePos = { x: number; y: number };
 
+export type TreatKind =
+  | 'cheeseburger'
+  | 'snail'
+  | 'frog'
+  | 'banana'
+  | 'cherries'
+  | 'berries'
+  | 'apple';
+
+export type TreatInfo = TilePos & { kind: TreatKind };
+
 export type DestinationInfo = {
   x: number;
   y: number;
@@ -35,7 +46,7 @@ export type InitState = {
   camp: TilePos;
   playerStart: TilePos;
   destinations: DestinationInfo[];
-  treats: TilePos[];
+  treats: TreatInfo[];
 };
 
 export type FrameState = {
@@ -45,8 +56,8 @@ export type FrameState = {
   playerVx: number;
   playerVy: number;
   score: number;
-  /** Live treat positions, excluding any collected so far. */
-  treats: TilePos[];
+  /** Live treat positions and varieties, excluding collected treats. */
+  treats: TreatInfo[];
   status: string;
   activeDestinationHref: string | null;
   pendingNavigation: string | null;

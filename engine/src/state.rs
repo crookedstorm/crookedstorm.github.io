@@ -7,6 +7,7 @@
 //! the pressed-key set for the frame.
 
 use crate::components::Direction;
+use crate::components::TreatKind;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -39,6 +40,22 @@ impl TilePos {
     }
 }
 
+/// Treat position and variety surfaced to the renderer. Position remains in
+/// tile space; `kind` selects the matching visual asset.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreatInfo {
+    pub x: i32,
+    pub y: i32,
+    pub kind: TreatKind,
+}
+
+impl TreatInfo {
+    pub fn new(x: i32, y: i32, kind: TreatKind) -> Self {
+        Self { x, y, kind }
+    }
+}
+
 /// Static destination surfaced once at init so the renderer can draw labels
 /// and link targets without re-querying the engine.
 #[derive(Clone, Debug, Serialize)]
@@ -62,7 +79,7 @@ pub struct InitState {
     pub camp: TilePos,
     pub player_start: TilePos,
     pub destinations: Vec<DestinationInfo>,
-    pub treats: Vec<TilePos>,
+    pub treats: Vec<TreatInfo>,
 }
 
 /// Per-frame snapshot consumed by the renderer. Carries only dynamic data so
@@ -76,8 +93,8 @@ pub struct FrameState {
     pub player_vx: f32,
     pub player_vy: f32,
     pub score: u32,
-    /// Live treat positions, excluding any collected so far.
-    pub treats: Vec<TilePos>,
+    /// Live treat positions and varieties, excluding collected treats.
+    pub treats: Vec<TreatInfo>,
     pub status: String,
     /// `Some(href)` when the player is standing on a destination this frame.
     /// Lets the renderer prompt "press Enter to enter".

@@ -137,6 +137,49 @@ pub struct Player {
     pub just_collected_treat: bool,
 }
 
+/// Treat varieties placed in each generated world. Each kind owns its display
+/// name and score value so collection logic and future sprite selection share
+/// one authoritative definition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TreatKind {
+    Cheeseburger,
+    Snail,
+    Frog,
+    Banana,
+    Cherries,
+    Berries,
+    Apple,
+}
+
+impl TreatKind {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Cheeseburger => "Cheeseburger",
+            Self::Snail => "Snail",
+            Self::Frog => "Little frog",
+            Self::Banana => "Banana",
+            Self::Cherries => "Cherries",
+            Self::Berries => "Berries",
+            Self::Apple => "Apple",
+        }
+    }
+
+    pub fn value(self) -> u32 {
+        match self {
+            Self::Cheeseburger => 300,
+            Self::Snail | Self::Frog => 100,
+            Self::Banana | Self::Cherries | Self::Berries | Self::Apple => 50,
+        }
+    }
+}
+
+/// Treat-specific data attached alongside [`ObjectKind::Treat`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Treat {
+    pub kind: TreatKind,
+}
+
 /// Whether a treat has been collected. Lets treats persist for accounting
 /// but be skipped by render and collision systems once removed from play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

@@ -19,6 +19,8 @@ use crate::components::Position;
 use crate::components::Sprite;
 use crate::components::SpriteId;
 use crate::components::Transform;
+use crate::components::Treat;
+use crate::components::TreatKind;
 use crate::components::Velocity;
 use crate::maze::Maze;
 use crate::maze::MazeConfig;
@@ -28,6 +30,7 @@ use crate::state::FrameState;
 use crate::state::InitState;
 use crate::state::Input;
 use crate::state::TilePos;
+use crate::state::TreatInfo;
 use crate::systems::TILE_SIZE;
 use crate::systems::TREAT_MESSAGE_FRAMES;
 use crate::world::Entity;
@@ -36,7 +39,7 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 /// Bumped whenever the engine's public contract changes.
-const PROTOCOL_VERSION: u32 = 4;
+const PROTOCOL_VERSION: u32 = 5;
 
 /// Engine release identifier surfaced to TypeScript as a pipeline smoke test.
 #[wasm_bindgen]
@@ -54,6 +57,7 @@ pub struct Engine {
     player: Entity,
     active_destination_href: Option<String>,
     pending_navigation: Option<String>,
+    last_collected_treat: Option<TreatKind>,
     treat_message_frames: u32,
 }
 
@@ -98,6 +102,7 @@ impl Engine {
             player,
             active_destination_href: None,
             pending_navigation: None,
+            last_collected_treat: None,
             treat_message_frames: 0,
         }
     }
@@ -149,7 +154,8 @@ impl Engine {
         systems::move_with_collision(&mut self.world, &self.maze, self.player);
 
         let collected_this_frame = systems::collect_treats(&mut self.world, self.player);
-        if collected_this_frame {
+        if let Some(kind) = collected_this_frame {
+            self.last_collected_treat = Some(kind);
             self.treat_message_frames = TREAT_MESSAGE_FRAMES;
         } else if let Some(player_state) = self.world.component_mut::<Player>(self.player) {
             // The just-collected flag is only set on the frame a treat is
@@ -166,7 +172,7 @@ impl Engine {
             self.pending_navigation = Some(href.clone());
         }
 
-        let status = self.compute_status(collected_this_frame);
+        let status = self.compute_status();
         if self.treat_message_frames > 0 {
             self.treat_message_frames -= 1;
         }
@@ -178,9 +184,11 @@ impl Engine {
 }
 
 impl Engine {
-    fn compute_status(&self, collected_this_frame: bool) -> String {
-        if collected_this_frame || self.treat_message_frames > 0 {
-            return "Treat acquired.".to_owned();
+    fn compute_status(&self) -> String {
+        if self.treat_message_frames > 0
+            && let Some(kind) = self.last_collected_treat
+        {
+            return format!("{} acquired! +{}", kind.display_name(), kind.value());
         }
 
         if let Some(href) = &self.active_destination_href {
@@ -195,7 +203,7 @@ impl Engine {
         "Adventuring…".to_owned()
     }
 
-    fn snapshot(&mut self, status: String, treats: Vec<TilePos>) -> FrameState {
+    fn snapshot(&mut self, status: String, treats: Vec<TreatInfo>) -> FrameState {
         let player = self
             .world
             .component::<Player>(self.player)
@@ -268,21 +276,22 @@ fn collect_destinations(world: &World) -> Vec<DestinationInfo> {
     destinations
 }
 
-fn collect_treats(world: &World) -> Vec<TilePos> {
+fn collect_treats(world: &World) -> Vec<TreatInfo> {
     let mut treats = Vec::new();
     for entity in world.entities_with::<ObjectKind>() {
         if let Some(ObjectKind::Treat) = world.component::<ObjectKind>(entity)
             && let Some(Position { x, y }) = world.component::<Position>(entity)
+            && let Some(Treat { kind }) = world.component::<Treat>(entity)
         {
-            treats.push(TilePos::new(*x, *y));
+            treats.push(TreatInfo::new(*x, *y, *kind));
         }
     }
     treats
 }
 
-/// Treats that have not yet been collected, in their tile positions. Used by
-/// the per-frame snapshot so the renderer can stop drawing collected treats.
-fn collect_live_treats(world: &World) -> Vec<TilePos> {
+/// Treats that have not yet been collected, including the kind the renderer
+/// uses to select an asset.
+fn collect_live_treats(world: &World) -> Vec<TreatInfo> {
     let mut treats = Vec::new();
     for entity in world.entities_with::<ObjectKind>() {
         let is_live_treat = matches!(
@@ -292,8 +301,11 @@ fn collect_live_treats(world: &World) -> Vec<TilePos> {
             world.component::<crate::components::Collected>(entity),
             Some(crate::components::Collected(true))
         );
-        if is_live_treat && let Some(Position { x, y }) = world.component::<Position>(entity) {
-            treats.push(TilePos::new(*x, *y));
+        if is_live_treat
+            && let Some(Position { x, y }) = world.component::<Position>(entity)
+            && let Some(Treat { kind }) = world.component::<Treat>(entity)
+        {
+            treats.push(TreatInfo::new(*x, *y, *kind));
         }
     }
     treats
@@ -305,5 +317,20 @@ fn section_label_for_href(href: &str) -> Option<&'static str> {
         "/blog/" => Some("Field notes and posts"),
         "/projects/" => Some("Projects and experiments"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Engine;
+    use crate::components::TreatKind;
+
+    #[test]
+    fn treat_status_names_the_collected_treat_and_value() {
+        let mut engine = Engine::new(7);
+        engine.last_collected_treat = Some(TreatKind::Cheeseburger);
+        engine.treat_message_frames = 1;
+
+        assert_eq!(engine.compute_status(), "Cheeseburger acquired! +300");
     }
 }

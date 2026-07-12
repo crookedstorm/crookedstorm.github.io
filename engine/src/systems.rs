@@ -10,6 +10,8 @@ use crate::components::Player;
 use crate::components::Position;
 use crate::components::Section;
 use crate::components::Transform;
+use crate::components::Treat;
+use crate::components::TreatKind;
 use crate::components::Velocity;
 use crate::maze::Maze;
 use crate::state::Input;
@@ -22,9 +24,6 @@ pub const TILE_SIZE: f32 = 32.0;
 /// Frames used to travel one full tile. Short enough to stay responsive,
 /// long enough to read as a gentle glide between grid centers.
 pub const GRID_STEP_FRAMES: u32 = 8;
-
-/// Points awarded per treat collected. Matches the original TS implementation.
-pub const TREAT_VALUE: u32 = 50;
 
 /// Frames the status line lingers on the "treat acquired" message after
 /// collection, matching the original TS feel.
@@ -180,19 +179,16 @@ pub fn move_with_collision(world: &mut World, maze: &Maze, player: Entity) {
 }
 
 /// Collect any uncollected treat overlapping the player's current tile.
-/// Returns `true` if a treat was collected this frame. Sets the player's
-/// `just_collected_treat` flag for the snapshot to surface to the renderer.
-pub fn collect_treats(world: &mut World, player: Entity) -> bool {
-    let Some(Position {
+/// Returns the collected kind so the caller can report its name and value.
+/// Sets the player's `just_collected_treat` flag for the snapshot.
+pub fn collect_treats(world: &mut World, player: Entity) -> Option<TreatKind> {
+    let Position {
         x: player_tile_x,
         y: player_tile_y,
-    }) = player_tile_position(world, player)
-    else {
-        return false;
-    };
+    } = player_tile_position(world, player)?;
 
     let treat_entities = world.entities_with::<ObjectKind>();
-    let mut collected_any = false;
+    let mut collected_kind = None;
 
     for entity in treat_entities {
         let is_treat = matches!(
@@ -214,18 +210,21 @@ pub fn collect_treats(world: &mut World, player: Entity) -> bool {
         let Some(Position { x, y }) = world.component::<Position>(entity).copied() else {
             continue;
         };
+        let Some(Treat { kind }) = world.component::<Treat>(entity).copied() else {
+            continue;
+        };
 
         if (player_tile_x - x).abs() <= 1 && (player_tile_y - y).abs() <= 1 {
             world.insert(entity, crate::components::Collected(true));
             if let Some(player_state) = world.component_mut::<Player>(player) {
-                player_state.score += TREAT_VALUE;
+                player_state.score += kind.value();
                 player_state.just_collected_treat = true;
             }
-            collected_any = true;
+            collected_kind = Some(kind);
         }
     }
 
-    collected_any
+    collected_kind
 }
 
 /// Returns the [`Section`] whose destination overlaps the player's tile, if
@@ -505,13 +504,19 @@ mod tests {
         let treat = world.spawn();
         world.insert(treat, Position { x: 15, y: 5 });
         world.insert(treat, ObjectKind::Treat);
+        world.insert(
+            treat,
+            Treat {
+                kind: TreatKind::Cheeseburger,
+            },
+        );
         world.insert(treat, Collected(false));
 
         let collected = collect_treats(&mut world, player);
-        assert!(collected);
+        assert_eq!(collected, Some(TreatKind::Cheeseburger));
 
         let player_state = world.component::<Player>(player).unwrap();
-        assert_eq!(player_state.score, TREAT_VALUE);
+        assert_eq!(player_state.score, 300);
         assert!(player_state.just_collected_treat);
 
         let treat_state = world.component::<Collected>(treat).unwrap();

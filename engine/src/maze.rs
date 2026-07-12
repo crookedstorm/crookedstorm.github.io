@@ -11,11 +11,24 @@ use crate::components::Collider;
 use crate::components::ObjectKind;
 use crate::components::Position;
 use crate::components::Section;
+use crate::components::Treat;
+use crate::components::TreatKind;
 use crate::rng::Rng;
 use crate::world::World;
 
-/// Treats placed per maze. Tunable, but matches the original TS spawn count.
-const TREAT_COUNT: usize = 8;
+/// Treat distribution placed in each maze. Positions remain seed-driven while
+/// the inventory and total available score stay consistent across worlds.
+const TREAT_KINDS: [TreatKind; 8] = [
+    TreatKind::Cheeseburger,
+    TreatKind::Snail,
+    TreatKind::Frog,
+    TreatKind::Banana,
+    TreatKind::Cherries,
+    TreatKind::Berries,
+    TreatKind::Berries,
+    TreatKind::Apple,
+];
+const TREAT_COUNT: usize = TREAT_KINDS.len();
 
 /// One carved room in tile coordinates. Stored so room centers can be used
 /// later to place camp, destinations, and treats.
@@ -354,9 +367,11 @@ impl Maze {
                 continue;
             }
 
+            let treat_kind = TREAT_KINDS[placed.len()];
             let entity = world.spawn();
             world.insert(entity, candidate);
             world.insert(entity, ObjectKind::Treat);
+            world.insert(entity, Treat { kind: treat_kind });
             world.insert(entity, Collected(false));
             world.insert(
                 entity,
@@ -393,6 +408,9 @@ mod tests {
     use super::MazeConfig;
     use super::Rng;
     use super::Room;
+    use crate::components::Treat;
+    use crate::components::TreatKind;
+    use crate::world::World;
 
     fn count_reachable_open_tiles(maze: &Maze) -> usize {
         let start = (0..maze.height)
@@ -521,6 +539,33 @@ mod tests {
                 a.y
             );
         }
+    }
+
+    #[test]
+    fn populated_maze_contains_the_expected_treat_distribution() {
+        let mut rng = Rng::from_seed(2026);
+        let maze = Maze::new(MazeConfig::default(), &mut rng);
+        let mut world = World::new();
+
+        maze.populate(&mut world, &mut rng);
+
+        let kinds: Vec<TreatKind> = world
+            .entities_with::<Treat>()
+            .into_iter()
+            .filter_map(|entity| world.component::<Treat>(entity).map(|treat| treat.kind))
+            .collect();
+
+        let count = |target: TreatKind| kinds.iter().filter(|kind| **kind == target).count();
+
+        assert_eq!(kinds.len(), 8);
+        assert_eq!(count(TreatKind::Cheeseburger), 1);
+        assert_eq!(count(TreatKind::Snail), 1);
+        assert_eq!(count(TreatKind::Frog), 1);
+        assert_eq!(count(TreatKind::Banana), 1);
+        assert_eq!(count(TreatKind::Cherries), 1);
+        assert_eq!(count(TreatKind::Berries), 2);
+        assert_eq!(count(TreatKind::Apple), 1);
+        assert_eq!(kinds.iter().map(|kind| kind.value()).sum::<u32>(), 750);
     }
 
     #[test]

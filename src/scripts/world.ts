@@ -14,41 +14,64 @@ import type {
   FrameState,
   InitState,
   Input,
+  TreatKind,
 } from '../engine/index.js';
 
 type Engine = Awaited<ReturnType<typeof createEngine>>;
+type TreatImages = Record<TreatKind, HTMLImageElement>;
 
-const raccoonPalette: Record<string, string> = {
-  B: '#06050d',
-  D: '#3b324d',
-  G: '#8f869f',
-  L: '#d9d0e8',
-  P: '#f0a6c8',
-  W: '#f0e8ff',
+type Camera = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
-const raccoonSprite = [
-  '................',
-  '....B......B....',
-  '...BGB....BGB...',
-  '..BGGGBBBBGGGB..',
-  '..BGDDGGGGDDGB..',
-  '.BGDDBGGGGBDDGB.',
-  '.BGDBWBGGBWBDBG.',
-  '.BGDDBBDDBBDDBG.',
-  '..BGGGGLLGGGGB..',
-  '...BGGLPPLGGB...',
-  '....BGGLLGGB....',
-  '...BBGGGGGGBB...',
-  '..BGGBGBBGGGBB..',
-  '.BGGBB....BBGGB.',
-  '..BB........BB..',
-  '................',
-];
+const minViewportTilesWide = 11;
+const minViewportTilesHigh = 9;
+const maxViewportTilesWide = 23;
+const maxViewportTilesHigh = 15;
+const viewportHeightRatio = 0.55;
 
-const spritePixelSize = 2;
-const spriteWidth = raccoonSprite[0].length * spritePixelSize;
-const spriteHeight = raccoonSprite.length * spritePixelSize;
+type Facing = 'down' | 'left' | 'right' | 'up';
+
+const raccoonSpriteSheetUrl = '/assets/world/raccoon.png';
+const raccoonFrameWidth = 24;
+const raccoonFrameHeight = 24;
+const raccoonFramesPerDirection = 3;
+const raccoonScale = 1.5;
+const raccoonDrawWidth = raccoonFrameWidth * raccoonScale;
+const raccoonDrawHeight = raccoonFrameHeight * raccoonScale;
+const raccoonAnimationFrameDuration = 5;
+
+const campfireSpriteSheetUrl = '/assets/world/campfire.png';
+const campfireFrameWidth = 24;
+const campfireFrameHeight = 24;
+const campfireFrameCount = 4;
+const campfireScale = 1.5;
+const campfireDrawWidth = campfireFrameWidth * campfireScale;
+const campfireDrawHeight = campfireFrameHeight * campfireScale;
+const campfireFrameDurationMs = 100;
+
+const treatSpriteUrls: Record<TreatKind, string> = {
+  cheeseburger: '/assets/world/cheeseburger.png',
+  snail: '/assets/world/snail.png',
+  frog: '/assets/world/frog.png',
+  banana: '/assets/world/banana.png',
+  cherries: '/assets/world/cherries.png',
+  berries: '/assets/world/berries.png',
+  apple: '/assets/world/apple.png',
+};
+
+const raccoonRows: Record<Exclude<Facing, 'left' | 'right'> | 'side', number> =
+  {
+    down: 0,
+    side: 1,
+    up: 2,
+  };
+
+let lastFacing: Facing = 'down';
+let raccoonAnimationTicks = 0;
 
 const destinationColors: Record<string, string> = {
   '/about/': '#f7d774',
@@ -79,6 +102,7 @@ if (!canvasContext) {
 }
 
 const context = canvasContext;
+context.imageSmoothingEnabled = false;
 
 const pressedKeys = new Set<string>();
 const directionPressOrder: Direction[] = [];
@@ -173,14 +197,90 @@ function buildInput(): Input {
   return input;
 }
 
-function drawBackground(init: InitState): void {
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+function clampOddTileCount(
+  value: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const clampedValue = clamp(value, minimum, maximum);
+
+  if (clampedValue % 2 === 1) {
+    return clampedValue;
+  }
+  if (clampedValue === minimum) {
+    return Math.min(clampedValue + 1, maximum);
+  }
+  return clampedValue - 1;
+}
+
+function resizeViewport(init: InitState): void {
+  const parentWidth = canvas.parentElement?.clientWidth ?? canvas.clientWidth;
+  const widthBudget = Math.floor(parentWidth / init.tileSize);
+  const heightBudget = Math.floor(
+    (window.innerHeight * viewportHeightRatio) / init.tileSize,
+  );
+
+  const tilesWide = clampOddTileCount(
+    widthBudget,
+    minViewportTilesWide,
+    Math.min(maxViewportTilesWide, init.width),
+  );
+  const tilesHigh = clampOddTileCount(
+    heightBudget,
+    minViewportTilesHigh,
+    Math.min(maxViewportTilesHigh, init.height),
+  );
+
+  canvas.width = tilesWide * init.tileSize;
+  canvas.height = tilesHigh * init.tileSize;
+  context.imageSmoothingEnabled = false;
+}
+
+function buildCamera(init: InitState, frame: FrameState): Camera {
+  const worldWidth = init.width * init.tileSize;
+  const worldHeight = init.height * init.tileSize;
+  const maxX = Math.max(0, worldWidth - canvas.width);
+  const maxY = Math.max(0, worldHeight - canvas.height);
+
+  return {
+    x: clamp(frame.playerX - canvas.width / 2, 0, maxX),
+    y: clamp(frame.playerY - canvas.height / 2, 0, maxY),
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
+function toScreenX(worldX: number, camera: Camera): number {
+  return worldX - camera.x;
+}
+
+function toScreenY(worldY: number, camera: Camera): number {
+  return worldY - camera.y;
+}
+
+function drawBackground(init: InitState, camera: Camera): void {
   context.fillStyle = '#0b0918';
   context.fillRect(0, 0, canvas.width, canvas.height);
 
   // Open floor tiles are implicit; only walls are drawn as solid blocks.
   for (const wall of init.walls) {
-    const x = wall.x * init.tileSize;
-    const y = wall.y * init.tileSize;
+    const worldX = wall.x * init.tileSize;
+    const worldY = wall.y * init.tileSize;
+    const x = toScreenX(worldX, camera);
+    const y = toScreenY(worldY, camera);
+
+    if (
+      x + init.tileSize < 0 ||
+      y + init.tileSize < 0 ||
+      x > camera.width ||
+      y > camera.height
+    ) {
+      continue;
+    }
 
     context.fillStyle = '#261a45';
     context.fillRect(x, y, init.tileSize, init.tileSize);
@@ -192,13 +292,27 @@ function drawBackground(init: InitState): void {
   // Faint floor grid so open space still reads as a tile world.
   context.strokeStyle = '#20183f';
   context.lineWidth = 1;
-  for (let x = 0; x <= canvas.width; x += init.tileSize) {
+
+  const firstGridX = Math.floor(camera.x / init.tileSize) * init.tileSize;
+  for (
+    let worldX = firstGridX;
+    worldX <= camera.x + camera.width;
+    worldX += init.tileSize
+  ) {
+    const x = toScreenX(worldX, camera);
     context.beginPath();
     context.moveTo(x, 0);
     context.lineTo(x, canvas.height);
     context.stroke();
   }
-  for (let y = 0; y <= canvas.height; y += init.tileSize) {
+
+  const firstGridY = Math.floor(camera.y / init.tileSize) * init.tileSize;
+  for (
+    let worldY = firstGridY;
+    worldY <= camera.y + camera.height;
+    worldY += init.tileSize
+  ) {
+    const y = toScreenY(worldY, camera);
     context.beginPath();
     context.moveTo(0, y);
     context.lineTo(canvas.width, y);
@@ -206,21 +320,43 @@ function drawBackground(init: InitState): void {
   }
 }
 
-function drawCamp(init: InitState): void {
-  const campX = init.camp.x * init.tileSize + init.tileSize / 2;
-  const campY = init.camp.y * init.tileSize + init.tileSize / 2;
+function drawCamp(
+  init: InitState,
+  camera: Camera,
+  campfireImage: HTMLImageElement,
+  elapsedTimeMs: number,
+): void {
+  const campX = toScreenX(
+    init.camp.x * init.tileSize + init.tileSize / 2,
+    camera,
+  );
+  const campY = toScreenY(
+    init.camp.y * init.tileSize + init.tileSize / 2,
+    camera,
+  );
+  const frame =
+    Math.floor(elapsedTimeMs / campfireFrameDurationMs) % campfireFrameCount;
+  const sourceX = frame * campfireFrameWidth;
+  const drawX = campX - campfireDrawWidth / 2;
+  const drawY = campY - campfireDrawHeight / 2;
 
-  context.fillStyle = '#f07f5b';
-  context.fillRect(campX - 8, campY - 8, 16, 16);
-
-  context.fillStyle = '#f7d774';
-  context.fillRect(campX - 4, campY - 14, 8, 8);
+  context.drawImage(
+    campfireImage,
+    sourceX,
+    0,
+    campfireFrameWidth,
+    campfireFrameHeight,
+    drawX,
+    drawY,
+    campfireDrawWidth,
+    campfireDrawHeight,
+  );
 }
 
-function drawDestinations(init: InitState): void {
+function drawDestinations(init: InitState, camera: Camera): void {
   for (const destination of init.destinations) {
-    const x = destination.x * init.tileSize;
-    const y = destination.y * init.tileSize;
+    const x = toScreenX(destination.x * init.tileSize, camera);
+    const y = toScreenY(destination.y * init.tileSize, camera);
 
     context.fillStyle = '#06050d';
     context.fillRect(x - 18, y - 18, 68, 44);
@@ -239,78 +375,156 @@ function drawDestinations(init: InitState): void {
   }
 }
 
-function drawTreats(init: InitState, frame: FrameState): void {
+function drawTreats(
+  init: InitState,
+  frame: FrameState,
+  camera: Camera,
+  treatImages: TreatImages,
+): void {
   // Drawn from the live treat list each frame so collected treats vanish.
   for (const treat of frame.treats) {
-    const x = treat.x * init.tileSize;
-    const y = treat.y * init.tileSize;
+    const image = treatImages[treat.kind];
+    const centerX = toScreenX(
+      treat.x * init.tileSize + init.tileSize / 2,
+      camera,
+    );
+    const centerY = toScreenY(
+      treat.y * init.tileSize + init.tileSize / 2,
+      camera,
+    );
+    const drawX = centerX - image.naturalWidth / 2;
+    const drawY = centerY - image.naturalHeight / 2;
 
     context.fillStyle = '#06050d';
-    context.fillRect(x + 10, y + 10, 12, 12);
-
-    context.fillStyle = '#f7d774';
-    context.fillRect(x + 11, y + 8, 10, 10);
-
-    context.fillStyle = '#f0a6c8';
-    context.fillRect(x + 14, y + 11, 4, 4);
+    context.fillRect(centerX - 8, centerY + 9, 16, 4);
+    context.drawImage(image, drawX, drawY);
   }
 }
 
-function drawPixelSprite(sprite: string[], x: number, y: number): void {
-  for (const [rowIndex, row] of sprite.entries()) {
-    for (const [columnIndex, pixel] of Array.from(row).entries()) {
-      const color = raccoonPalette[pixel];
-      if (!color) {
-        continue;
-      }
-      context.fillStyle = color;
-      context.fillRect(
-        x + columnIndex * spritePixelSize,
-        y + rowIndex * spritePixelSize,
-        spritePixelSize,
-        spritePixelSize,
-      );
-    }
-  }
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Unable to load image: ${url}`));
+    image.src = url;
+  });
 }
 
-function drawPlayerShadow(
-  sprite: string[],
-  x: number,
-  y: number,
-  offsetX: number,
-  offsetY: number,
-): void {
+async function loadTreatImages(): Promise<TreatImages> {
+  const entries = await Promise.all(
+    Object.entries(treatSpriteUrls).map(async ([kind, url]) => {
+      const image = await loadImage(url);
+      return [kind, image] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries) as TreatImages;
+}
+
+function facingFromFrame(frame: FrameState): Facing {
+  if (frame.playerVx < 0) {
+    return 'left';
+  }
+  if (frame.playerVx > 0) {
+    return 'right';
+  }
+  if (frame.playerVy < 0) {
+    return 'up';
+  }
+  if (frame.playerVy > 0) {
+    return 'down';
+  }
+  return lastFacing;
+}
+
+function isPlayerMoving(frame: FrameState): boolean {
+  return frame.playerVx !== 0 || frame.playerVy !== 0;
+}
+
+function drawPlayerShadow(x: number, y: number): void {
   context.fillStyle = '#06050d';
-  for (const [rowIndex, row] of sprite.entries()) {
-    for (const [columnIndex, pixel] of Array.from(row).entries()) {
-      if (!raccoonPalette[pixel]) {
-        continue;
-      }
-      context.fillRect(
-        x + columnIndex * spritePixelSize + offsetX,
-        y + rowIndex * spritePixelSize + offsetY,
-        spritePixelSize,
-        spritePixelSize,
-      );
-    }
+  context.fillRect(x + 4, y + raccoonDrawHeight - 8, raccoonDrawWidth - 8, 8);
+}
+
+function drawPlayer(
+  frame: FrameState,
+  camera: Camera,
+  raccoonImage: HTMLImageElement,
+): void {
+  const facing = facingFromFrame(frame);
+  const moving = isPlayerMoving(frame);
+
+  if (moving) {
+    lastFacing = facing;
+    raccoonAnimationTicks += 1;
+  } else {
+    raccoonAnimationTicks = 0;
   }
+
+  const row =
+    facing === 'up'
+      ? raccoonRows.up
+      : facing === 'down'
+        ? raccoonRows.down
+        : raccoonRows.side;
+  const column = moving
+    ? Math.floor(raccoonAnimationTicks / raccoonAnimationFrameDuration) %
+      raccoonFramesPerDirection
+    : 1;
+  const sourceX = column * raccoonFrameWidth;
+  const sourceY = row * raccoonFrameHeight;
+  const spriteX = toScreenX(frame.playerX, camera) - raccoonDrawWidth / 2;
+  const spriteY = toScreenY(frame.playerY, camera) - raccoonDrawHeight / 2;
+
+  drawPlayerShadow(spriteX, spriteY);
+
+  if (facing === 'left') {
+    context.save();
+    context.translate(spriteX + raccoonDrawWidth, spriteY);
+    context.scale(-1, 1);
+    context.drawImage(
+      raccoonImage,
+      sourceX,
+      sourceY,
+      raccoonFrameWidth,
+      raccoonFrameHeight,
+      0,
+      0,
+      raccoonDrawWidth,
+      raccoonDrawHeight,
+    );
+    context.restore();
+    return;
+  }
+
+  context.drawImage(
+    raccoonImage,
+    sourceX,
+    sourceY,
+    raccoonFrameWidth,
+    raccoonFrameHeight,
+    spriteX,
+    spriteY,
+    raccoonDrawWidth,
+    raccoonDrawHeight,
+  );
 }
 
-function drawPlayer(frame: FrameState): void {
-  const spriteX = frame.playerX - spriteWidth / 2;
-  const spriteY = frame.playerY - spriteHeight / 2;
+function draw(
+  init: InitState,
+  frame: FrameState,
+  raccoonImage: HTMLImageElement,
+  campfireImage: HTMLImageElement,
+  treatImages: TreatImages,
+  elapsedTimeMs: number,
+): void {
+  const camera = buildCamera(init, frame);
 
-  drawPlayerShadow(raccoonSprite, spriteX, spriteY, 3, 3);
-  drawPixelSprite(raccoonSprite, spriteX, spriteY);
-}
-
-function draw(init: InitState, frame: FrameState): void {
-  drawBackground(init);
-  drawTreats(init, frame);
-  drawCamp(init);
-  drawDestinations(init);
-  drawPlayer(frame);
+  drawBackground(init, camera);
+  drawTreats(init, frame, camera, treatImages);
+  drawCamp(init, camera, campfireImage, elapsedTimeMs);
+  drawDestinations(init, camera);
+  drawPlayer(frame, camera, raccoonImage);
 }
 
 function handleNavigation(frame: FrameState): void {
@@ -324,24 +538,34 @@ function handleNavigation(frame: FrameState): void {
 
 async function bootstrap(): Promise<void> {
   const seed = readSeedFromUrl();
-  const engine: Engine = await createEngine(seed);
+  const [engine, raccoonImage, campfireImage, treatImages]: [
+    Engine,
+    HTMLImageElement,
+    HTMLImageElement,
+    TreatImages,
+  ] = await Promise.all([
+    createEngine(seed),
+    loadImage(raccoonSpriteSheetUrl),
+    loadImage(campfireSpriteSheetUrl),
+    loadTreatImages(),
+  ]);
   const init = engine.init_state() as unknown as InitState;
 
-  // Size the canvas to the generated maze so the world always fits exactly.
-  canvas.width = init.width * init.tileSize;
-  canvas.height = init.height * init.tileSize;
+  // Size the canvas as a responsive camera viewport into the generated maze.
+  resizeViewport(init);
+  window.addEventListener('resize', () => resizeViewport(init));
 
   // Render an initial frame so the page is not blank before the first rAF.
   statusOutput.textContent = 'Booting world…';
   scoreOutput.textContent = 'Score: 0';
 
-  function tick(): void {
+  function tick(elapsedTimeMs: number): void {
     const input = buildInput();
     const frame = engine.step(input) as unknown as FrameState;
 
     statusOutput.textContent = frame.status;
     scoreOutput.textContent = `Score: ${frame.score}`;
-    draw(init, frame);
+    draw(init, frame, raccoonImage, campfireImage, treatImages, elapsedTimeMs);
     handleNavigation(frame);
 
     window.requestAnimationFrame(tick);

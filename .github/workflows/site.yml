@@ -1,9 +1,10 @@
-name: Deploy site
+name: Web site
 
 on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -28,14 +29,31 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         run: npm ci
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Check formatting
         run: npm run format:check
 
-      - name: Lint
+      - name: Lint TypeScript and Astro
         run: npm run lint
+
+      - name: Check Rust formatting
+        run: npm run engine:fmt
+
+      - name: Lint Rust
+        run: npm run engine:clippy
+
+      - name: Test Rust
+        run: npm run engine:test
 
   build:
     runs-on: ubuntu-latest
@@ -50,10 +68,18 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
-      - name: Install dependencies
+      - name: Install Node dependencies
         run: npm ci
 
-      - name: Build
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build site (engine + astro)
         run: npm run build
 
       - name: Configure GitHub Pages
@@ -65,6 +91,7 @@ jobs:
           path: dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

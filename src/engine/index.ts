@@ -14,7 +14,6 @@ export type Input = {
   left: boolean;
   right: boolean;
   preferredDirection: Direction | null;
-  enter: boolean;
 };
 
 export type TilePos = { x: number; y: number };

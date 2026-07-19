@@ -19,6 +19,7 @@ import type {
 
 type Engine = Awaited<ReturnType<typeof createEngine>>;
 type TreatImages = Record<TreatKind, HTMLImageElement>;
+type DestinationImages = Partial<Record<string, HTMLImageElement>>;
 
 type Camera = {
   x: number;
@@ -52,6 +53,12 @@ const campfireScale = 1.5;
 const campfireDrawWidth = campfireFrameWidth * campfireScale;
 const campfireDrawHeight = campfireFrameHeight * campfireScale;
 const campfireFrameDurationMs = 100;
+
+const destinationSpriteUrls: Record<string, string> = {
+  '/about/': '/assets/world/about.png',
+  '/blog/': '/assets/world/field.png',
+  '/projects/': '/assets/world/projects.png',
+};
 
 const treatSpriteUrls: Record<TreatKind, string> = {
   cheeseburger: '/assets/world/cheeseburger.png',
@@ -106,7 +113,6 @@ context.imageSmoothingEnabled = false;
 
 const pressedKeys = new Set<string>();
 const directionPressOrder: Direction[] = [];
-let enterPressedThisFrame = false;
 
 function keyToDirection(key: string): Direction | null {
   if (key === 'arrowup' || key === 'w') {
@@ -135,6 +141,11 @@ function removeDirectionPress(direction: Direction): void {
     return;
   }
   directionPressOrder.splice(index, 1);
+}
+
+function clearPressedKeys(): void {
+  pressedKeys.clear();
+  directionPressOrder.length = 0;
 }
 
 function isDirectionHeld(direction: Direction): boolean {
@@ -190,10 +201,8 @@ function buildInput(): Input {
     left: pressedKeys.has('arrowleft') || pressedKeys.has('a'),
     right: pressedKeys.has('arrowright') || pressedKeys.has('d'),
     preferredDirection: currentPreferredDirection(),
-    enter: enterPressedThisFrame,
   };
 
-  enterPressedThisFrame = false;
   return input;
 }
 
@@ -353,10 +362,49 @@ function drawCamp(
   );
 }
 
-function drawDestinations(init: InitState, camera: Camera): void {
+function drawDestinationPlaque(
+  centerX: number,
+  bottomY: number,
+  label: string,
+): void {
+  const plaqueLabel = label.toUpperCase().split(' ')[0];
+
+  context.font = '700 12px Courier New, monospace';
+  const textWidth = context.measureText(plaqueLabel).width;
+  const plaqueWidth = textWidth + 12;
+  const plaqueHeight = 18;
+  const plaqueX = centerX - plaqueWidth / 2;
+  const plaqueY = bottomY - plaqueHeight;
+
+  context.fillStyle = '#06050d';
+  context.fillRect(plaqueX, plaqueY, plaqueWidth, plaqueHeight);
+
+  context.fillStyle = '#f7d774';
+  context.fillText(plaqueLabel, plaqueX + 6, plaqueY + 13);
+}
+
+function drawDestinations(
+  init: InitState,
+  camera: Camera,
+  destinationImages: DestinationImages,
+): void {
   for (const destination of init.destinations) {
     const x = toScreenX(destination.x * init.tileSize, camera);
     const y = toScreenY(destination.y * init.tileSize, camera);
+    const image = destinationImages[destination.href];
+
+    if (image) {
+      const buildingX = x + init.tileSize / 2 - image.naturalWidth / 2;
+      const buildingY = y + init.tileSize - image.naturalHeight;
+
+      context.drawImage(image, buildingX, buildingY);
+      drawDestinationPlaque(
+        x + init.tileSize / 2,
+        buildingY - 2,
+        destination.label,
+      );
+      continue;
+    }
 
     context.fillStyle = '#06050d';
     context.fillRect(x - 18, y - 18, 68, 44);
@@ -366,7 +414,6 @@ function drawDestinations(init: InitState, camera: Camera): void {
 
     context.fillStyle = '#151029';
     context.font = '700 12px Courier New, monospace';
-    // Short label: the section name, uppercased first word.
     context.fillText(
       destination.label.toUpperCase().split(' ')[0],
       x - 8,
@@ -408,6 +455,17 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error(`Unable to load image: ${url}`));
     image.src = url;
   });
+}
+
+async function loadDestinationImages(): Promise<DestinationImages> {
+  const entries = await Promise.all(
+    Object.entries(destinationSpriteUrls).map(async ([href, url]) => {
+      const image = await loadImage(url);
+      return [href, image] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries) as DestinationImages;
 }
 
 async function loadTreatImages(): Promise<TreatImages> {
@@ -515,6 +573,7 @@ function draw(
   frame: FrameState,
   raccoonImage: HTMLImageElement,
   campfireImage: HTMLImageElement,
+  destinationImages: DestinationImages,
   treatImages: TreatImages,
   elapsedTimeMs: number,
 ): void {
@@ -523,7 +582,7 @@ function draw(
   drawBackground(init, camera);
   drawTreats(init, frame, camera, treatImages);
   drawCamp(init, camera, campfireImage, elapsedTimeMs);
-  drawDestinations(init, camera);
+  drawDestinations(init, camera, destinationImages);
   drawPlayer(frame, camera, raccoonImage);
 }
 
@@ -531,22 +590,23 @@ function handleNavigation(frame: FrameState): void {
   if (!frame.pendingNavigation) {
     return;
   }
-  // Engine requested a page transition because Enter was pressed while
-  // standing on a destination.
+  // Engine requested a page transition when the player arrived at a door.
   window.location.href = frame.pendingNavigation;
 }
 
 async function bootstrap(): Promise<void> {
   const seed = readSeedFromUrl();
-  const [engine, raccoonImage, campfireImage, treatImages]: [
+  const [engine, raccoonImage, campfireImage, destinationImages, treatImages]: [
     Engine,
     HTMLImageElement,
     HTMLImageElement,
+    DestinationImages,
     TreatImages,
   ] = await Promise.all([
     createEngine(seed),
     loadImage(raccoonSpriteSheetUrl),
     loadImage(campfireSpriteSheetUrl),
+    loadDestinationImages(),
     loadTreatImages(),
   ]);
   const init = engine.init_state() as unknown as InitState;
@@ -565,7 +625,15 @@ async function bootstrap(): Promise<void> {
 
     statusOutput.textContent = frame.status;
     scoreOutput.textContent = `Score: ${frame.score}`;
-    draw(init, frame, raccoonImage, campfireImage, treatImages, elapsedTimeMs);
+    draw(
+      init,
+      frame,
+      raccoonImage,
+      campfireImage,
+      destinationImages,
+      treatImages,
+      elapsedTimeMs,
+    );
     handleNavigation(frame);
 
     window.requestAnimationFrame(tick);
@@ -587,17 +655,11 @@ window.addEventListener('keydown', (event) => {
       'a',
       's',
       'd',
-      'enter',
     ].includes(key)
   ) {
     event.preventDefault();
 
-    const wasAlreadyPressed = pressedKeys.has(key);
     pressedKeys.add(key);
-
-    if (key === 'enter' && !wasAlreadyPressed) {
-      enterPressedThisFrame = true;
-    }
 
     const direction = keyToDirection(key);
     if (direction) {
@@ -618,5 +680,10 @@ window.addEventListener('keyup', (event) => {
     removeDirectionPress(direction);
   }
 });
+
+// A keyup can be lost while the browser is navigating away. Clear state before
+// page caching so history restoration cannot resume movement from a stale key.
+window.addEventListener('blur', clearPressedKeys);
+window.addEventListener('pagehide', clearPressedKeys);
 
 void bootstrap();

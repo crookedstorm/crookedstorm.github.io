@@ -47,6 +47,22 @@ impl Room {
             y: self.top + self.height / 2,
         }
     }
+
+    /// Returns whether this room can hold a destination building and its
+    /// one-tile walkable buffer.
+    pub fn can_host_destination(self) -> bool {
+        self.width >= 5 && self.height >= 4
+    }
+
+    /// Returns the centered door tile for a destination building.
+    ///
+    /// The room-size constraint leaves a walkable ring around the 3×2
+    /// footprint, so corridors arriving at the room center can route around
+    /// the building to reach its door.
+    pub fn destination_door(self) -> Position {
+        debug_assert!(self.can_host_destination());
+        self.center()
+    }
 }
 
 /// Adjustable knobs for generation. Values favor roomy, readable layouts for
@@ -57,7 +73,8 @@ pub struct MazeConfig {
     pub width: i32,
     /// Maze height in tiles.
     pub height: i32,
-    /// Minimum room side length in tiles.
+    /// Minimum room side length in tiles. Five leaves a one-tile buffer
+    /// around every destination building's 3×2 footprint.
     pub min_room: i32,
     /// Maximum room side length in tiles.
     pub max_room: i32,
@@ -71,7 +88,7 @@ impl Default for MazeConfig {
         Self {
             width: 30,
             height: 22,
-            min_room: 4,
+            min_room: 5,
             max_room: 8,
             min_split_area: 36,
         }
@@ -105,9 +122,60 @@ impl Maze {
             height: config.height - 2,
         };
 
-        let _ = maze.split(root, config, rng);
+        maze.split_root(root, config, rng);
 
         maze
+    }
+
+    /// Split the root into four regions before applying randomized BSP splits.
+    ///
+    /// Every region is large enough for one buffered destination room. This
+    /// guarantees a camp plus three destination rooms without retrying a seed.
+    fn split_root(&mut self, root: Room, config: MazeConfig, rng: &mut Rng) {
+        let minimum_span = config.min_room * 2 + 1;
+        if root.width < minimum_span || root.height < minimum_span {
+            let _ = self.split(root, config, rng);
+            return;
+        }
+
+        let left_width = root.width / 2;
+        let top_height = root.height / 2;
+        let right_width = root.width - left_width - 1;
+        let bottom_height = root.height - top_height - 1;
+        let north_west = Room {
+            left: root.left,
+            top: root.top,
+            width: left_width,
+            height: top_height,
+        };
+        let north_east = Room {
+            left: root.left + left_width + 1,
+            top: root.top,
+            width: right_width,
+            height: top_height,
+        };
+        let south_west = Room {
+            left: root.left,
+            top: root.top + top_height + 1,
+            width: left_width,
+            height: bottom_height,
+        };
+        let south_east = Room {
+            left: root.left + left_width + 1,
+            top: root.top + top_height + 1,
+            width: right_width,
+            height: bottom_height,
+        };
+
+        let north_west_anchor = self.split(north_west, config, rng);
+        let north_east_anchor = self.split(north_east, config, rng);
+        let south_west_anchor = self.split(south_west, config, rng);
+        let south_east_anchor = self.split(south_east, config, rng);
+
+        self.connect(north_west_anchor, north_east_anchor);
+        self.connect(north_west_anchor, south_west_anchor);
+        self.connect(north_east_anchor, south_east_anchor);
+        self.connect(south_west_anchor, south_east_anchor);
     }
 
     /// Recursive BSP step. Splits the given room along a random axis when
@@ -153,8 +221,10 @@ impl Maze {
             return None;
         }
 
+        // Leave one wall tile at the split and at least `min_room` tiles in
+        // both children.
         let split_point =
-            rng.between(config.min_room as u32, (span - config.min_room) as u32) as i32;
+            rng.between(config.min_room as u32, (span - config.min_room - 1) as u32) as i32;
 
         let (lower, upper) = if horizontal {
             (
@@ -295,41 +365,89 @@ impl Maze {
 
     /// Place camp, destinations, and treats in generated rooms.
     pub fn populate(&self, world: &mut World, rng: &mut Rng) {
-        if self.rooms.len() < 2 {
-            return;
-        }
-
-        // Pick distinct room indices for camp and each destination.
-        let room_indices = pick_distinct(rng, self.rooms.len(), 1 + 3);
-
-        // Camp goes in the first picked room.
-        let camp_pos = self.rooms[room_indices[0]].center();
-        {
-            let entity = world.spawn();
-            world.insert(entity, camp_pos);
-            world.insert(entity, ObjectKind::Camp);
-            world.insert(
-                entity,
-                crate::components::Sprite(crate::components::SpriteId::Camp),
-            );
-        }
-
         let sections = [Section::About, Section::Blog, Section::Projects];
+        let destination_room_candidates: Vec<usize> = self
+            .rooms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, room)| room.can_host_destination().then_some(index))
+            .collect();
+
+        assert!(
+            destination_room_candidates.len() >= sections.len()
+                && self.rooms.len() > sections.len(),
+            "maze must provide a buffered room for every destination and a separate camp room"
+        );
+
+        let destination_room_indices: Vec<usize> =
+            pick_distinct(rng, destination_room_candidates.len(), sections.len())
+                .into_iter()
+                .map(|index| destination_room_candidates[index])
+                .collect();
+        let camp_room_candidates: Vec<usize> = (0..self.rooms.len())
+            .filter(|index| !destination_room_indices.contains(index))
+            .collect();
+        let camp_room_index =
+            camp_room_candidates[rng.below(camp_room_candidates.len() as u32) as usize];
+
+        let camp_pos = self.rooms[camp_room_index].center();
+        let camp = world.spawn();
+        world.insert(camp, camp_pos);
+        world.insert(camp, ObjectKind::Camp);
+        world.insert(
+            camp,
+            crate::components::Sprite(crate::components::SpriteId::Camp),
+        );
 
         let mut destination_positions = Vec::new();
-        for (room_index, section) in room_indices[1..].iter().zip(sections) {
-            let center = self.rooms[*room_index].center();
-            destination_positions.push(center);
+        for (room_index, section) in destination_room_indices.iter().zip(sections) {
+            let door = self.rooms[*room_index].destination_door();
+            destination_positions.push(door);
             let entity = world.spawn();
-            world.insert(entity, center);
+            world.insert(entity, door);
             world.insert(entity, ObjectKind::Destination { section });
             world.insert(
                 entity,
                 crate::components::Sprite(crate::components::SpriteId::Destination),
             );
+
+            if section == Section::About {
+                self.place_about_building_collision(world, door);
+            }
         }
 
         self.place_treats(world, rng, camp_pos, &destination_positions);
+    }
+
+    /// Marks the About building as impassable while leaving its door open.
+    ///
+    /// The destination position is the centered door tile in the lower row of
+    /// the sprite's 3×2 footprint. The roof overhang is visual-only.
+    fn place_about_building_collision(&self, world: &mut World, door: Position) {
+        for x in (door.x - 1)..=(door.x + 1) {
+            self.place_collider(world, Position { x, y: door.y - 1 });
+        }
+
+        self.place_collider(
+            world,
+            Position {
+                x: door.x - 1,
+                y: door.y,
+            },
+        );
+        self.place_collider(
+            world,
+            Position {
+                x: door.x + 1,
+                y: door.y,
+            },
+        );
+    }
+
+    fn place_collider(&self, world: &mut World, position: Position) {
+        let entity = world.spawn();
+        world.insert(entity, position);
+        world.insert(entity, Collider);
     }
 
     /// Scatter `TREAT_COUNT` treats across open floor tiles, rejecting any
@@ -363,6 +481,9 @@ impl Maze {
             if destinations.iter().any(|dest| is_near(candidate, *dest)) {
                 continue;
             }
+            if is_blocked_by_collider(world, candidate) {
+                continue;
+            }
             if placed.iter().any(|treat| is_near(candidate, *treat)) {
                 continue;
             }
@@ -387,6 +508,15 @@ fn is_near(a: Position, b: Position) -> bool {
     (a.x - b.x).abs() <= 1 && (a.y - b.y).abs() <= 1
 }
 
+/// Returns whether an existing solid object occupies a tile.
+fn is_blocked_by_collider(world: &World, position: Position) -> bool {
+    world.entities_with::<Collider>().into_iter().any(|entity| {
+        world
+            .component::<Position>(entity)
+            .is_some_and(|occupied| *occupied == position)
+    })
+}
+
 /// Pick `count` distinct indices in `[0, limit)` without replacement.
 fn pick_distinct(rng: &mut Rng, limit: usize, count: usize) -> Vec<usize> {
     let mut pool: Vec<usize> = (0..limit).collect();
@@ -408,6 +538,10 @@ mod tests {
     use super::MazeConfig;
     use super::Rng;
     use super::Room;
+    use crate::components::Collider;
+    use crate::components::ObjectKind;
+    use crate::components::Position;
+    use crate::components::Section;
     use crate::components::Treat;
     use crate::components::TreatKind;
     use crate::world::World;
@@ -444,6 +578,49 @@ mod tests {
             queue.push_back((x - 1, y));
             queue.push_back((x, y + 1));
             queue.push_back((x, y - 1));
+        }
+
+        reachable
+    }
+
+    fn reachable_positions(maze: &Maze, world: &World, start: Position) -> Vec<Position> {
+        let collision_positions: Vec<Position> = world
+            .entities_with::<Collider>()
+            .into_iter()
+            .filter_map(|entity| world.component::<Position>(entity).copied())
+            .collect();
+        let mut seen = vec![false; (maze.width * maze.height) as usize];
+        let mut queue = VecDeque::from([start]);
+        let mut reachable = Vec::new();
+
+        while let Some(position) = queue.pop_front() {
+            if maze.is_wall(position.x, position.y) || collision_positions.contains(&position) {
+                continue;
+            }
+
+            let index = (position.y * maze.width + position.x) as usize;
+            if seen[index] {
+                continue;
+            }
+            seen[index] = true;
+            reachable.push(position);
+
+            queue.push_back(Position {
+                x: position.x + 1,
+                y: position.y,
+            });
+            queue.push_back(Position {
+                x: position.x - 1,
+                y: position.y,
+            });
+            queue.push_back(Position {
+                x: position.x,
+                y: position.y + 1,
+            });
+            queue.push_back(Position {
+                x: position.x,
+                y: position.y - 1,
+            });
         }
 
         reachable
@@ -566,6 +743,151 @@ mod tests {
         assert_eq!(count(TreatKind::Berries), 2);
         assert_eq!(count(TreatKind::Apple), 1);
         assert_eq!(kinds.iter().map(|kind| kind.value()).sum::<u32>(), 750);
+    }
+
+    #[test]
+    fn about_destination_has_a_building_collision_footprint_with_an_open_door() {
+        let mut rng = Rng::from_seed(2026);
+        let maze = Maze::new(MazeConfig::default(), &mut rng);
+        let mut world = World::new();
+
+        maze.populate(&mut world, &mut rng);
+
+        let door = world
+            .entities_with::<ObjectKind>()
+            .into_iter()
+            .find_map(|entity| {
+                matches!(
+                    world.component::<ObjectKind>(entity),
+                    Some(ObjectKind::Destination {
+                        section: Section::About
+                    })
+                )
+                .then(|| world.component::<Position>(entity).copied())
+                .flatten()
+            })
+            .expect("populated maze should contain an About destination");
+
+        let collision_positions: Vec<Position> = world
+            .entities_with::<Collider>()
+            .into_iter()
+            .filter_map(|entity| world.component::<Position>(entity).copied())
+            .collect();
+
+        assert_eq!(collision_positions.len(), 5);
+        for x in (door.x - 1)..=(door.x + 1) {
+            assert!(collision_positions.contains(&Position { x, y: door.y - 1 }));
+        }
+        assert!(collision_positions.contains(&Position {
+            x: door.x - 1,
+            y: door.y,
+        }));
+        assert!(collision_positions.contains(&Position {
+            x: door.x + 1,
+            y: door.y,
+        }));
+        assert!(!collision_positions.contains(&door));
+
+        let treat_positions: Vec<Position> = world
+            .entities_with::<Treat>()
+            .into_iter()
+            .filter_map(|entity| world.component::<Position>(entity).copied())
+            .collect();
+        assert!(
+            treat_positions
+                .iter()
+                .all(|position| !collision_positions.contains(position))
+        );
+    }
+
+    #[test]
+    fn destination_rooms_have_a_walkable_buffer_across_generated_seeds() {
+        for seed in 0..128 {
+            let mut rng = Rng::from_seed(seed);
+            let maze = Maze::new(MazeConfig::default(), &mut rng);
+            let mut world = World::new();
+
+            maze.populate(&mut world, &mut rng);
+
+            let destination_positions: Vec<Position> = world
+                .entities_with::<ObjectKind>()
+                .into_iter()
+                .filter(|entity| {
+                    matches!(
+                        world.component::<ObjectKind>(*entity),
+                        Some(ObjectKind::Destination { .. })
+                    )
+                })
+                .filter_map(|entity| world.component::<Position>(entity).copied())
+                .collect();
+
+            assert_eq!(
+                destination_positions.len(),
+                3,
+                "seed {seed}, rooms: {:?}",
+                maze.rooms
+            );
+            for door in &destination_positions {
+                let room = maze
+                    .rooms
+                    .iter()
+                    .copied()
+                    .find(|room| {
+                        door.x >= room.left
+                            && door.x < room.left + room.width
+                            && door.y >= room.top
+                            && door.y < room.top + room.height
+                    })
+                    .expect("destination door should be in a room");
+
+                assert!(room.can_host_destination(), "seed {seed}");
+                assert!(door.x - 2 >= room.left, "seed {seed}");
+                assert!(door.x + 2 < room.left + room.width, "seed {seed}");
+                assert!(door.y - 2 >= room.top, "seed {seed}");
+                assert!(door.y + 1 < room.top + room.height, "seed {seed}");
+            }
+
+            // Blog and Projects still render as markers, but test their future
+            // building footprints so every destination keeps a clear route.
+            for door in &destination_positions {
+                for x in (door.x - 1)..=(door.x + 1) {
+                    let collider = world.spawn();
+                    world.insert(collider, Position { x, y: door.y - 1 });
+                    world.insert(collider, Collider);
+                }
+                for x in [door.x - 1, door.x + 1] {
+                    let collider = world.spawn();
+                    world.insert(collider, Position { x, y: door.y });
+                    world.insert(collider, Collider);
+                }
+            }
+
+            let camp_position = world
+                .entities_with::<ObjectKind>()
+                .into_iter()
+                .find_map(|entity| {
+                    matches!(
+                        world.component::<ObjectKind>(entity),
+                        Some(ObjectKind::Camp)
+                    )
+                    .then(|| world.component::<Position>(entity).copied())
+                    .flatten()
+                })
+                .expect("populated maze should contain a camp");
+            let reachable = reachable_positions(&maze, &world, camp_position);
+            let treat_positions: Vec<Position> = world
+                .entities_with::<Treat>()
+                .into_iter()
+                .filter_map(|entity| world.component::<Position>(entity).copied())
+                .collect();
+
+            for target in destination_positions.iter().chain(treat_positions.iter()) {
+                assert!(
+                    reachable.contains(target),
+                    "seed {seed}, target: {target:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -39,7 +39,7 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 /// Bumped whenever the engine's public contract changes.
-const PROTOCOL_VERSION: u32 = 5;
+const PROTOCOL_VERSION: u32 = 6;
 
 /// Engine release identifier surfaced to TypeScript as a pipeline smoke test.
 #[wasm_bindgen]
@@ -109,7 +109,7 @@ impl Engine {
 
     /// One-time geometry and static-object snapshot for the renderer.
     pub fn init_state(&self) -> JsValue {
-        let walls = collect_walls(&self.world);
+        let walls = collect_walls(&self.maze);
         let camp = find_camp(&self.world).unwrap_or(Position { x: 1, y: 1 });
         let destinations = collect_destinations(&self.world);
         let treats = collect_treats(&self.world);
@@ -164,13 +164,16 @@ impl Engine {
         }
 
         let active_section = systems::active_destination(&self.world, self.player);
-        self.active_destination_href = active_section.map(|section| section.href().to_owned());
+        let active_destination_href = active_section.map(|section| section.href().to_owned());
 
-        if input.enter
-            && let Some(href) = &self.active_destination_href
-        {
-            self.pending_navigation = Some(href.clone());
+        if arrived_at_destination(
+            self.active_destination_href.as_deref(),
+            active_destination_href.as_deref(),
+        ) {
+            self.pending_navigation = active_destination_href.clone();
         }
+
+        self.active_destination_href = active_destination_href;
 
         let status = self.compute_status();
         if self.treat_message_frames > 0 {
@@ -193,7 +196,7 @@ impl Engine {
 
         if let Some(href) = &self.active_destination_href {
             let label = section_label_for_href(href).unwrap_or("");
-            return format!("{label}. Press Enter to enter.");
+            return format!("Entering {label}…");
         }
 
         if systems::is_near_camp(&self.world, self.player) {
@@ -238,6 +241,14 @@ impl Engine {
     }
 }
 
+/// Returns `true` only when the player has moved onto a destination tile.
+///
+/// Keeping the active destination across frames prevents a page navigation
+/// from being requested repeatedly while the player remains on its door.
+fn arrived_at_destination(previous: Option<&str>, current: Option<&str>) -> bool {
+    current.is_some() && current != previous
+}
+
 fn find_camp(world: &World) -> Option<Position> {
     for entity in world.entities_with::<ObjectKind>() {
         if let Some(ObjectKind::Camp) = world.component::<ObjectKind>(entity)
@@ -249,13 +260,18 @@ fn find_camp(world: &World) -> Option<Position> {
     None
 }
 
-fn collect_walls(world: &World) -> Vec<TilePos> {
+/// Returns maze walls for the renderer without exposing gameplay-only colliders.
+fn collect_walls(maze: &Maze) -> Vec<TilePos> {
     let mut walls = Vec::new();
-    for entity in world.entities_with::<crate::components::Collider>() {
-        if let Some(Position { x, y }) = world.component::<Position>(entity) {
-            walls.push(TilePos::new(*x, *y));
+
+    for y in 0..maze.height {
+        for x in 0..maze.width {
+            if maze.is_wall(x, y) {
+                walls.push(TilePos::new(x, y));
+            }
         }
     }
+
     walls
 }
 
@@ -323,7 +339,15 @@ fn section_label_for_href(href: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::Engine;
+    use super::arrived_at_destination;
     use crate::components::TreatKind;
+
+    #[test]
+    fn arrival_is_only_reported_when_destination_changes() {
+        assert!(arrived_at_destination(None, Some("/about/")));
+        assert!(!arrived_at_destination(Some("/about/"), Some("/about/")));
+        assert!(!arrived_at_destination(Some("/about/"), None));
+    }
 
     #[test]
     fn treat_status_names_the_collected_treat_and_value() {

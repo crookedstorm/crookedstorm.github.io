@@ -23,7 +23,6 @@ pub struct Input {
     pub left: bool,
     pub right: bool,
     pub preferred_direction: Option<Direction>,
-    pub enter: bool,
 }
 
 /// Tile-space coordinate pair surfaced to the renderer.
@@ -96,8 +95,7 @@ pub struct FrameState {
     /// Live treat positions and varieties, excluding collected treats.
     pub treats: Vec<TreatInfo>,
     pub status: String,
-    /// `Some(href)` when the player is standing on a destination this frame.
-    /// Lets the renderer prompt "press Enter to enter".
+    /// `Some(href)` when the player is standing on a destination tile this frame.
     pub active_destination_href: Option<String>,
     /// `Some(href)` when the engine requests a top-level page transition.
     /// TypeScript performs `window.location.href = ...` and the engine clears

@@ -3,6 +3,7 @@
 //! [`World`](crate::world::World) and maze references it needs. The caller
 //! in [`Engine`](crate::Engine) chooses the execution order.
 
+use crate::components::Collider;
 use crate::components::Direction;
 use crate::components::GridMotion;
 use crate::components::ObjectKind;
@@ -81,12 +82,23 @@ fn player_tile_position(world: &World, player: Entity) -> Option<Position> {
         })
 }
 
-fn can_step(maze: &Maze, tile_x: i32, tile_y: i32, direction: Direction) -> bool {
+fn can_step(world: &World, maze: &Maze, tile_x: i32, tile_y: i32, direction: Direction) -> bool {
     let (dx, dy) = direction.delta();
-    !maze.is_wall(tile_x + dx, tile_y + dy)
+    let destination_x = tile_x + dx;
+    let destination_y = tile_y + dy;
+
+    if maze.is_wall(destination_x, destination_y) {
+        return false;
+    }
+
+    !world.entities_with::<Collider>().into_iter().any(|entity| {
+        world
+            .component::<Position>(entity)
+            .is_some_and(|position| position.x == destination_x && position.y == destination_y)
+    })
 }
 
-fn start_buffered_step(motion: &mut GridMotion, maze: &Maze) {
+fn start_buffered_step(world: &World, motion: &mut GridMotion, maze: &Maze) {
     if motion.active_direction.is_some() {
         return;
     }
@@ -95,7 +107,7 @@ fn start_buffered_step(motion: &mut GridMotion, maze: &Maze) {
         return;
     };
 
-    if !can_step(maze, motion.tile_x, motion.tile_y, direction) {
+    if !can_step(world, maze, motion.tile_x, motion.tile_y, direction) {
         return;
     }
 
@@ -145,7 +157,7 @@ pub fn move_with_collision(world: &mut World, maze: &Maze, player: Entity) {
         .copied()
         .unwrap_or_else(|| centered_transform(motion.tile_x, motion.tile_y));
 
-    start_buffered_step(&mut motion, maze);
+    start_buffered_step(world, &mut motion, maze);
 
     let next_transform = if motion.active_direction.is_some() {
         motion.frames_remaining -= 1;
@@ -159,7 +171,7 @@ pub fn move_with_collision(world: &mut World, maze: &Maze, player: Entity) {
             motion.tile_x += dx;
             motion.tile_y += dy;
             motion.active_direction = None;
-            start_buffered_step(&mut motion, maze);
+            start_buffered_step(world, &mut motion, maze);
             centered_transform(motion.tile_x, motion.tile_y)
         } else {
             transform
@@ -227,9 +239,8 @@ pub fn collect_treats(world: &mut World, player: Entity) -> Option<TreatKind> {
     collected_kind
 }
 
-/// Returns the [`Section`] whose destination overlaps the player's tile, if
-/// any. Used by the engine to drive the "press Enter to enter" prompt and the
-/// pending-navigation signal.
+/// Returns the [`Section`] whose destination door occupies the player's tile.
+/// Used by the engine to request a one-time navigation on arrival.
 pub fn active_destination(world: &World, player: Entity) -> Option<Section> {
     let Position {
         x: player_tile_x,
@@ -239,8 +250,8 @@ pub fn active_destination(world: &World, player: Entity) -> Option<Section> {
     for entity in world.entities_with::<ObjectKind>() {
         if let Some(ObjectKind::Destination { section }) = world.component::<ObjectKind>(entity)
             && let Some(Position { x, y }) = world.component::<Position>(entity)
-            && (player_tile_x - x).abs() <= 1
-            && (player_tile_y - y).abs() <= 1
+            && player_tile_x == *x
+            && player_tile_y == *y
         {
             return Some(*section);
         }
@@ -297,6 +308,7 @@ pub fn remaining_treats(world: &World) -> u32 {
 mod tests {
     use super::*;
     use crate::components::Collected;
+    use crate::components::Collider;
     use crate::components::Direction;
     use crate::components::GridMotion;
     use crate::components::ObjectKind;
@@ -324,7 +336,6 @@ mod tests {
         let mut rng = Rng::from_seed(7);
         let mut world = World::new();
         let maze = Maze::new(MazeConfig::default(), &mut rng);
-        maze.spawn_walls(&mut world);
 
         let player = world.spawn();
         world.insert(player, centered_transform(tile_x, tile_y));
@@ -358,7 +369,6 @@ mod tests {
             left: false,
             right: true,
             preferred_direction: Some(Direction::Up),
-            enter: false,
         };
 
         apply_input(&mut world, player, &input);
@@ -382,7 +392,6 @@ mod tests {
                 left: false,
                 right: true,
                 preferred_direction: Some(Direction::Right),
-                enter: false,
             },
         );
 
@@ -405,7 +414,6 @@ mod tests {
             left: false,
             right: true,
             preferred_direction: Some(Direction::Right),
-            enter: false,
         };
 
         for _ in 0..GRID_STEP_FRAMES {
@@ -431,7 +439,6 @@ mod tests {
             left: false,
             right: true,
             preferred_direction: Some(Direction::Right),
-            enter: false,
         };
         let turn_up = Input {
             up: true,
@@ -439,7 +446,6 @@ mod tests {
             left: false,
             right: true,
             preferred_direction: Some(Direction::Up),
-            enter: false,
         };
 
         for _ in 0..(GRID_STEP_FRAMES - 1) {
@@ -480,7 +486,6 @@ mod tests {
                 left: false,
                 right: true,
                 preferred_direction: Some(Direction::Right),
-                enter: false,
             },
         );
 
@@ -495,6 +500,33 @@ mod tests {
         assert_eq!(transform.y, tile_center(3));
         assert_eq!(velocity.x, 0.0);
         assert_eq!(velocity.y, 0.0);
+    }
+
+    #[test]
+    fn dynamic_collider_blocks_a_grid_step() {
+        let (mut world, player, _maze) = build_world_with_player_at(3, 3);
+        let maze = empty_maze(8, 8);
+        let collider = world.spawn();
+        world.insert(collider, Position { x: 4, y: 3 });
+        world.insert(collider, Collider);
+
+        step_player(
+            &mut world,
+            &maze,
+            player,
+            Input {
+                up: false,
+                down: false,
+                left: false,
+                right: true,
+                preferred_direction: Some(Direction::Right),
+            },
+        );
+
+        let motion = world.component::<GridMotion>(player).unwrap();
+        assert_eq!(motion.tile_x, 3);
+        assert_eq!(motion.tile_y, 3);
+        assert_eq!(motion.active_direction, None);
     }
 
     #[test]
@@ -524,8 +556,8 @@ mod tests {
     }
 
     #[test]
-    fn active_destination_reports_overlapping_section() {
-        let (mut world, player, _) = build_world_with_player_at(10, 7);
+    fn active_destination_requires_the_door_tile() {
+        let (mut world, player, _) = build_world_with_player_at(10, 8);
 
         let dest = world.spawn();
         world.insert(dest, Position { x: 10, y: 8 });
@@ -538,6 +570,22 @@ mod tests {
 
         let section = active_destination(&world, player);
         assert_eq!(section, Some(Section::About));
+    }
+
+    #[test]
+    fn active_destination_ignores_adjacent_tiles() {
+        let (mut world, player, _) = build_world_with_player_at(10, 7);
+
+        let dest = world.spawn();
+        world.insert(dest, Position { x: 10, y: 8 });
+        world.insert(
+            dest,
+            ObjectKind::Destination {
+                section: Section::About,
+            },
+        );
+
+        assert_eq!(active_destination(&world, player), None);
     }
 
     #[test]

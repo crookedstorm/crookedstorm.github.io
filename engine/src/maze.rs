@@ -411,19 +411,17 @@ impl Maze {
                 crate::components::Sprite(crate::components::SpriteId::Destination),
             );
 
-            if section == Section::About {
-                self.place_about_building_collision(world, door);
-            }
+            self.place_destination_building_collision(world, door);
         }
 
         self.place_treats(world, rng, camp_pos, &destination_positions);
     }
 
-    /// Marks the About building as impassable while leaving its door open.
+    /// Marks a destination building as impassable while leaving its door open.
     ///
     /// The destination position is the centered door tile in the lower row of
     /// the sprite's 3×2 footprint. The roof overhang is visual-only.
-    fn place_about_building_collision(&self, world: &mut World, door: Position) {
+    fn place_destination_building_collision(&self, world: &mut World, door: Position) {
         for x in (door.x - 1)..=(door.x + 1) {
             self.place_collider(world, Position { x, y: door.y - 1 });
         }
@@ -541,7 +539,6 @@ mod tests {
     use crate::components::Collider;
     use crate::components::ObjectKind;
     use crate::components::Position;
-    use crate::components::Section;
     use crate::components::Treat;
     use crate::components::TreatKind;
     use crate::world::World;
@@ -746,47 +743,46 @@ mod tests {
     }
 
     #[test]
-    fn about_destination_has_a_building_collision_footprint_with_an_open_door() {
+    fn destination_buildings_have_collision_footprints_with_open_doors() {
         let mut rng = Rng::from_seed(2026);
         let maze = Maze::new(MazeConfig::default(), &mut rng);
         let mut world = World::new();
 
         maze.populate(&mut world, &mut rng);
 
-        let door = world
+        let doors: Vec<Position> = world
             .entities_with::<ObjectKind>()
             .into_iter()
-            .find_map(|entity| {
+            .filter(|entity| {
                 matches!(
-                    world.component::<ObjectKind>(entity),
-                    Some(ObjectKind::Destination {
-                        section: Section::About
-                    })
+                    world.component::<ObjectKind>(*entity),
+                    Some(ObjectKind::Destination { .. })
                 )
-                .then(|| world.component::<Position>(entity).copied())
-                .flatten()
             })
-            .expect("populated maze should contain an About destination");
-
+            .filter_map(|entity| world.component::<Position>(entity).copied())
+            .collect();
         let collision_positions: Vec<Position> = world
             .entities_with::<Collider>()
             .into_iter()
             .filter_map(|entity| world.component::<Position>(entity).copied())
             .collect();
 
-        assert_eq!(collision_positions.len(), 5);
-        for x in (door.x - 1)..=(door.x + 1) {
-            assert!(collision_positions.contains(&Position { x, y: door.y - 1 }));
+        assert_eq!(doors.len(), 3);
+        assert_eq!(collision_positions.len(), 15);
+        for door in doors {
+            for x in (door.x - 1)..=(door.x + 1) {
+                assert!(collision_positions.contains(&Position { x, y: door.y - 1 }));
+            }
+            assert!(collision_positions.contains(&Position {
+                x: door.x - 1,
+                y: door.y,
+            }));
+            assert!(collision_positions.contains(&Position {
+                x: door.x + 1,
+                y: door.y,
+            }));
+            assert!(!collision_positions.contains(&door));
         }
-        assert!(collision_positions.contains(&Position {
-            x: door.x - 1,
-            y: door.y,
-        }));
-        assert!(collision_positions.contains(&Position {
-            x: door.x + 1,
-            y: door.y,
-        }));
-        assert!(!collision_positions.contains(&door));
 
         let treat_positions: Vec<Position> = world
             .entities_with::<Treat>()
@@ -845,21 +841,6 @@ mod tests {
                 assert!(door.x + 2 < room.left + room.width, "seed {seed}");
                 assert!(door.y - 2 >= room.top, "seed {seed}");
                 assert!(door.y + 1 < room.top + room.height, "seed {seed}");
-            }
-
-            // Blog and Projects still render as markers, but test their future
-            // building footprints so every destination keeps a clear route.
-            for door in &destination_positions {
-                for x in (door.x - 1)..=(door.x + 1) {
-                    let collider = world.spawn();
-                    world.insert(collider, Position { x, y: door.y - 1 });
-                    world.insert(collider, Collider);
-                }
-                for x in [door.x - 1, door.x + 1] {
-                    let collider = world.spawn();
-                    world.insert(collider, Position { x, y: door.y });
-                    world.insert(collider, Collider);
-                }
             }
 
             let camp_position = world

@@ -389,12 +389,22 @@ function drawCamp(
   );
 }
 
+function destinationPlaqueLabel(destination: {
+  href: string;
+  label: string;
+}): string {
+  if (destination.href === '/blog/') {
+    return 'FIELD NOTES';
+  }
+  return destination.label.toUpperCase().split(' ')[0];
+}
+
 function drawDestinationPlaque(
   centerX: number,
   bottomY: number,
   label: string,
 ): void {
-  const plaqueLabel = label.toUpperCase().split(' ')[0];
+  const plaqueLabel = label;
 
   context.font = '700 12px Courier New, monospace';
   const textWidth = context.measureText(plaqueLabel).width;
@@ -428,7 +438,7 @@ function drawDestinations(
       drawDestinationPlaque(
         x + init.tileSize / 2,
         buildingY - 2,
-        destination.label,
+        destinationPlaqueLabel(destination),
       );
       continue;
     }

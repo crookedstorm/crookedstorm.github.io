@@ -220,6 +220,53 @@ p {
   image-rendering: pixelated;
 }
 
+.world-direction-pad {
+  display: grid;
+  grid-template-areas:
+    '. up .'
+    'left down right';
+  grid-template-columns: repeat(3, minmax(3.5rem, 1fr));
+  gap: 0.5rem;
+  width: min(100%, 14rem);
+  margin-block: 1.5rem;
+  touch-action: none;
+  user-select: none;
+}
+
+.world-direction-button {
+  min-height: 3.5rem;
+  border: 4px solid #f7d774;
+  background: #2a1d4a;
+  color: #f7d774;
+  cursor: pointer;
+  font-family: 'Press Start 2P', 'Courier New', monospace;
+  font-size: 1.5rem;
+  touch-action: none;
+}
+
+.world-direction-button:hover,
+.world-direction-button:focus-visible,
+.world-direction-button:active {
+  background: #f7d774;
+  color: #151029;
+}
+
+.world-direction-button-up {
+  grid-area: up;
+}
+
+.world-direction-button-left {
+  grid-area: left;
+}
+
+.world-direction-button-down {
+  grid-area: down;
+}
+
+.world-direction-button-right {
+  grid-area: right;
+}
+
 .world-status {
   display: flex;
   flex-wrap: wrap;

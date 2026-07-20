@@ -92,10 +92,18 @@ const statusMessageElement = document.querySelector<HTMLElement>(
   '#world-status-message',
 );
 const scoreElement = document.querySelector<HTMLElement>('#world-score');
+const directionButtonElements = document.querySelectorAll<HTMLButtonElement>(
+  '[data-world-direction]',
+);
 
-if (!canvasElement || !statusMessageElement || !scoreElement) {
+if (
+  !canvasElement ||
+  !statusMessageElement ||
+  !scoreElement ||
+  directionButtonElements.length === 0
+) {
   throw new Error(
-    'World gateway requires #world-canvas, #world-status-message, and #world-score.',
+    'World gateway requires its canvas, status elements, and direction buttons.',
   );
 }
 
@@ -112,6 +120,8 @@ const context = canvasContext;
 context.imageSmoothingEnabled = false;
 
 const pressedKeys = new Set<string>();
+const pressedTouchDirections = new Set<Direction>();
+const directionPointerIds = new Map<number, Direction>();
 const directionPressOrder: Direction[] = [];
 
 function keyToDirection(key: string): Direction | null {
@@ -143,12 +153,29 @@ function removeDirectionPress(direction: Direction): void {
   directionPressOrder.splice(index, 1);
 }
 
-function clearPressedKeys(): void {
+function clearPressedInput(): void {
   pressedKeys.clear();
+  pressedTouchDirections.clear();
+  directionPointerIds.clear();
   directionPressOrder.length = 0;
 }
 
+function directionFromControl(value: string | undefined): Direction | null {
+  if (
+    value === 'up' ||
+    value === 'down' ||
+    value === 'left' ||
+    value === 'right'
+  ) {
+    return value;
+  }
+  return null;
+}
+
 function isDirectionHeld(direction: Direction): boolean {
+  if (pressedTouchDirections.has(direction)) {
+    return true;
+  }
   if (direction === 'up') {
     return pressedKeys.has('arrowup') || pressedKeys.has('w');
   }
@@ -681,9 +708,45 @@ window.addEventListener('keyup', (event) => {
   }
 });
 
+for (const button of directionButtonElements) {
+  const direction = directionFromControl(button.dataset.worldDirection);
+  if (!direction) {
+    throw new Error(
+      `Unknown world direction: ${button.dataset.worldDirection}`,
+    );
+  }
+
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    button.setPointerCapture(event.pointerId);
+    directionPointerIds.set(event.pointerId, direction);
+    pressedTouchDirections.add(direction);
+    rememberDirectionPress(direction);
+  });
+
+  const releaseDirection = (event: PointerEvent): void => {
+    const pressedDirection = directionPointerIds.get(event.pointerId);
+    if (!pressedDirection) {
+      return;
+    }
+
+    directionPointerIds.delete(event.pointerId);
+    if (!Array.from(directionPointerIds.values()).includes(pressedDirection)) {
+      pressedTouchDirections.delete(pressedDirection);
+    }
+    if (!isDirectionHeld(pressedDirection)) {
+      removeDirectionPress(pressedDirection);
+    }
+  };
+
+  button.addEventListener('pointerup', releaseDirection);
+  button.addEventListener('pointercancel', releaseDirection);
+  button.addEventListener('lostpointercapture', releaseDirection);
+}
+
 // A keyup can be lost while the browser is navigating away. Clear state before
 // page caching so history restoration cannot resume movement from a stale key.
-window.addEventListener('blur', clearPressedKeys);
-window.addEventListener('pagehide', clearPressedKeys);
+window.addEventListener('blur', clearPressedInput);
+window.addEventListener('pagehide', clearPressedInput);
 
 void bootstrap();

@@ -15,8 +15,8 @@ const description =
       <p class="eyebrow">WORLD GATEWAY</p>
       <h1>Choose a Path</h1>
       <p>
-        Use arrow keys or WASD to move. Arrive at a destination door to open
-        that section.
+        Use arrow keys, WASD, or the direction pad to move. Arrive at a
+        destination door to open that section.
       </p>
       <canvas
         id="world-canvas"
@@ -28,6 +28,40 @@ const description =
         The interactive map requires Canvas support. Use the links below to
         browse the site.
       </canvas>
+      <div class="world-direction-pad" role="group" aria-label="World movement">
+        <button
+          class="world-direction-button world-direction-button-up"
+          type="button"
+          data-world-direction="up"
+          aria-label="Move up"
+        >
+          ▲
+        </button>
+        <button
+          class="world-direction-button world-direction-button-left"
+          type="button"
+          data-world-direction="left"
+          aria-label="Move left"
+        >
+          ◀
+        </button>
+        <button
+          class="world-direction-button world-direction-button-down"
+          type="button"
+          data-world-direction="down"
+          aria-label="Move down"
+        >
+          ▼
+        </button>
+        <button
+          class="world-direction-button world-direction-button-right"
+          type="button"
+          data-world-direction="right"
+          aria-label="Move right"
+        >
+          ▶
+        </button>
+      </div>
       <p id="world-status" class="world-status">
         <span id="world-status-message" aria-live="polite"
           >Standing at camp.</span
